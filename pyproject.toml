@@ -5,7 +5,7 @@ addopts = "-q"
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-exclude = ["workspace", "secrets"]
+exclude = ["workspace"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
