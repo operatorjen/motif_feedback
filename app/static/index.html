@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Motif Feedback System</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand-block">
+      <span class="brand-mark">⟁</span>
+    </div>
+    <div class="masthead-actions">
+      <button id="toggle-left-panel" class="layout-toggle" type="button" aria-expanded="true" aria-controls="left-panel">PROJECTS ◀</button>
+      <button id="toggle-right-panel" class="layout-toggle" type="button" aria-expanded="true" aria-controls="right-panel">INSPECTOR ▶</button>
+      <div class="system-status" id="system-status" aria-live="polite">BOOTING</div>
+    </div>
+  </header>
+
+  <div class="app-grid" id="app-grid">
+    <aside class="sidebar" id="left-panel" aria-label="Room controls">
+      <section class="panel-section">
+        <div class="section-label">PROJECT</div>
+        <select id="project-select" aria-label="Current project"></select>
+        <div class="inline-form">
+          <input id="new-project-name" type="text" maxlength="80" placeholder="new project">
+          <button id="create-project" type="button">+</button>
+        </div>
+        <button id="delete-project" class="delete-project" type="button">DELETE CURRENT PROJECT</button>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-label">ONLINE RESEARCH</div>
+        <select id="research-mode" aria-label="Research mode">
+          <option value="auto">AUTO / LEAD THEN SHARE</option>
+          <option value="lead">FORCE ONE LEAD</option>
+          <option value="all">ALL SELECTED AGENTS</option>
+          <option value="off">OFF</option>
+        </select>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-label">IN THE ROOM</div>
+        <label class="agent-toggle agent-a">
+          <input type="checkbox" value="agent_a" checked>
+          <span><strong>THE PHENOMENOLOGIST</strong><small>embodiment / motif / situated experience</small></span>
+        </label>
+        <label class="agent-toggle agent-b">
+          <input type="checkbox" value="agent_b" checked>
+          <span><strong>THE CYBERNETICIST</strong><small>feedback / signaling / black boxes</small></span>
+        </label>
+        <label class="agent-toggle agent-c">
+          <input type="checkbox" value="agent_c" checked>
+          <span><strong>THE GAME THEORIST</strong><small>rules / positions / infinite play</small></span>
+        </label>
+      </section>
+    </aside>
+
+    <main class="room">
+      <div class="room-head">
+        <div>
+          <div class="section-label">ROOM</div>
+          <h1 id="project-title">GENERAL</h1>
+        </div>
+        <div class="research-indicator" id="research-indicator">NO SEARCH YET</div>
+      </div>
+
+      <div class="setup-warning hidden" id="setup-warning">
+        <strong>FIRST-RUN SETUP IS INCOMPLETE.</strong>
+        <span>Choose a provider and model for each agent in SETUP, and add any required provider keys to .env.</span>
+      </div>
+
+      <section class="messages" id="messages" aria-live="polite" aria-label="Conversation"></section>
+
+      <form class="composer" id="composer">
+        <label class="sr-only" for="message-input">Message the room</label>
+        <textarea id="message-input" rows="4" maxlength="50000" placeholder="Talk to the room, paste a URL to examine, or ask them to make, save, or inspect something..."></textarea>
+        <div class="composer-foot">
+          <span class="file-rule">Agents can revise their own files. Only you can remove files.</span>
+          <button id="send-button" type="submit">SEND</button>
+        </div>
+      </form>
+    </main>
+
+    <aside class="inspector" id="right-panel" aria-label="Inspector">
+      <div class="tab-row" role="tablist">
+        <button class="tab active" data-tab="agents" type="button">AGENTS</button>
+        <button class="tab" data-tab="setup" type="button">SETUP</button>
+        <button class="tab" data-tab="sources" type="button">SOURCES</button>
+        <button class="tab" data-tab="files" type="button">FILES</button>
+      </div>
+
+      <section class="tab-panel active" id="tab-agents">
+        <div class="section-label">EDITABLE PERSONA</div>
+        <select id="persona-select" aria-label="Persona"></select>
+        <div class="persona-summary" id="persona-summary"></div>
+        <details class="memory-loop-block" open>
+          <summary>AGENT MEMORY LOOP</summary>
+          <div id="memory-loop-summary" class="memory-loop-summary"></div>
+          <div class="memory-level-label">CURRENT PROJECT RETURNS</div>
+          <div id="memory-loop-events" class="memory-loop-events"></div>
+          <div class="memory-level-label cross-project">CROSS-PROJECT CONTINUITY</div>
+          <div id="global-memory-summary" class="global-memory-summary"></div>
+          <div id="global-memory-events" class="memory-loop-events global-memory-events"></div>
+        </details>
+        <textarea class="code-editor" id="persona-editor" spellcheck="false" aria-label="Persona YAML"></textarea>
+        <div class="button-row">
+          <button id="reload-persona" type="button" class="secondary">RELOAD</button>
+          <button id="save-persona" type="button">SAVE PERSONA</button>
+        </div>
+        <details class="proposals-block">
+          <summary>IDENTITY CHANGE PROPOSALS <span id="proposal-count">0</span></summary>
+          <div id="proposal-list"></div>
+        </details>
+        <details class="shared-context-block">
+          <summary>SHARED ⟁ PROJECT CONTEXT</summary>
+          <p class="microcopy">This Markdown is loaded into every agent turn. Only you can edit it through this interface.</p>
+          <textarea class="code-editor shared-context-editor" id="shared-context-editor" spellcheck="false" aria-label="Shared project context Markdown"></textarea>
+          <div class="button-row">
+            <button id="reload-shared-context" type="button" class="secondary">RELOAD CONTEXT</button>
+            <button id="save-shared-context" type="button">SAVE CONTEXT</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="tab-panel" id="tab-setup">
+        <div class="section-label">DIRECT MODEL PROVIDERS</div>
+        <div class="key-status" id="key-status">KEY STATUS UNKNOWN</div>
+
+        <form id="setup-form" class="stack-form">
+          <label>PHENOMENOLOGIST PROVIDER
+            <select id="provider-agent-a" required></select>
+          </label>
+          <label>PHENOMENOLOGIST MODEL ID<input id="model-agent-a" type="text" list="model-options-agent-a" placeholder="type or select a model ID" required></label>
+          <datalist id="model-options-agent-a"></datalist>
+          <label>CYBERNETICIST PROVIDER
+            <select id="provider-agent-b" required></select>
+          </label>
+          <label>CYBERNETICIST MODEL ID<input id="model-agent-b" type="text" list="model-options-agent-b" placeholder="type or select a model ID" required></label>
+          <datalist id="model-options-agent-b"></datalist>
+          <label>GAME THEORIST PROVIDER
+            <select id="provider-agent-c" required></select>
+          </label>
+          <label>GAME THEORIST MODEL ID<input id="model-agent-c" type="text" list="model-options-agent-c" placeholder="type or select a model ID" required></label>
+          <datalist id="model-options-agent-c"></datalist>
+          <label>DEFAULT RESEARCH MODE
+            <select id="default-research-mode">
+              <option value="auto">AUTO (FETCH SUPPLIED URLS)</option>
+              <option value="lead">LEAD (FETCH SUPPLIED URLS)</option>
+              <option value="all">ALL (FETCH SUPPLIED URLS)</option>
+              <option value="off">OFF</option>
+            </select>
+          </label>
+          <div class="split-fields">
+            <label>TEMPERATURE<input id="temperature" type="number" min="0" max="2" step="0.01" required></label>
+            <label>MAX TOKENS<input id="max-tokens" type="number" min="128" max="12000" step="1" required></label>
+          </div>
+          <button type="submit">SAVE SETUP</button>
+        </form>
+
+        <details class="shared-context-block provider-catalog-block">
+          <summary>PROVIDER CATALOG</summary>
+          <p class="microcopy">
+            Add hosted or local OpenAI-compatible endpoints here. Keep secret values in
+            <code>.env</code>; catalog entries contain only the environment-variable name.
+            Model IDs are suggestions—the fields above always accept a custom ID. Only add
+            endpoints you trust: they receive the agents' model requests.
+          </p>
+          <textarea
+            class="code-editor"
+            id="provider-catalog-editor"
+            spellcheck="false"
+            aria-label="Provider catalog YAML"
+          ></textarea>
+          <div class="button-row">
+            <button id="reload-provider-catalog" type="button" class="secondary">RELOAD CATALOG</button>
+            <button id="save-provider-catalog" type="button">SAVE CATALOG</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="tab-panel" id="tab-sources">
+        <div class="section-label">BOUNDED WEB SOURCES</div>
+        <p class="microcopy source-copy">URLs pasted into a prompt are fetched once without cookies or scripts, reduced to readable text, and shared with the room. Remove any stored snapshot here.</p>
+        <div class="source-list" id="source-list"></div>
+        <div class="section-label preview-label">EXTRACTED PAGE TEXT</div>
+        <div class="source-preview" id="source-preview">Select a source.</div>
+      </section>
+
+      <section class="tab-panel" id="tab-files">
+        <div class="section-label">PROJECT FOLDER</div>
+        <p class="microcopy">Files persist with this project until you remove them. Code opens with syntax highlighting; images and safe SVG graphics open visually. HTML demos live-refresh while agents edit them; Python runs only after your approval.</p>
+        <form id="upload-form" class="upload-box">
+          <input id="file-input" type="file" accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.html,.css,.js,.jsx,.ts,.tsx,.py,.sh,.toml,.ini,.xml,.sql,.c,.h,.cpp,.hpp,.java,.go,.rs,.svg,.png,.jpg,.jpeg,.gif,.webp">
+          <button type="submit">UPLOAD FILE</button>
+        </form>
+        <div class="file-list" id="file-list"></div>
+        <div class="section-label preview-label">PREVIEW</div>
+        <div class="file-preview markdown-body" id="file-preview">Select a file.</div>
+      </section>
+    </aside>
+  </div>
+
+  <section class="demo-overlay hidden" id="demo-overlay" aria-label="Code demo">
+    <header class="demo-overlay-head">
+      <strong id="demo-title">CODE DEMO</strong>
+      <div>
+        <button id="demo-refresh" type="button">REFRESH</button>
+        <button id="demo-collapse" type="button" aria-expanded="true">COLLAPSE</button>
+        <button id="demo-close" type="button">CLOSE</button>
+      </div>
+    </header>
+    <div class="demo-overlay-body" id="demo-body">
+      <section id="demo-run-controls" class="demo-run-controls hidden">
+        <label>
+          ARGUMENTS <small>one argument per line; no shell is used</small>
+          <textarea id="demo-arguments" rows="3" maxlength="4000" spellcheck="false"></textarea>
+        </label>
+        <label>
+          LIVE SCRIPT INPUT <small>sent to the running script when you press SEND INPUT</small>
+          <textarea id="demo-stdin" rows="4" maxlength="4000" spellcheck="false"></textarea>
+        </label>
+        <div class="demo-run-actions">
+          <button id="demo-start" type="button">START ISOLATED RUN</button>
+          <button id="demo-cancel" type="button" disabled>CANCEL RUN</button>
+          <button id="demo-send-input" type="button" disabled>SEND INPUT</button>
+          <button id="demo-send-eof" type="button" disabled>SEND EOF</button>
+        </div>
+        <p class="microcopy">
+          Live input is line-oriented for <code>input()</code> and
+          <code>sys.stdin.readline()</code>; this is not a full terminal/TTY.
+          Scripts may use <code>from motif_role import emit</code>, then call
+          <code>emit("feedback_attention", target="room", intensity=.7)</code>.
+          Other IDs: <code>embodied_attention</code>, <code>strategic_attention</code>,
+          <code>integrative_attention</code>, <code>playful_attention</code>, or
+          <code>critical_attention</code>.
+          The app validates the signal and applies it once, to your next chat message.
+          Script text cannot become an agent instruction.
+        </p>
+        <div id="demo-role-signals" class="demo-role-signals hidden"></div>
+      </section>
+      <iframe
+        id="demo-frame"
+        class="demo-frame hidden"
+        title="Sandboxed project demo"
+        sandbox="allow-scripts"
+        csp="default-src 'none'; base-uri 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; frame-src 'none'; img-src data: blob:; media-src 'none'; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"
+        referrerpolicy="no-referrer"
+      ></iframe>
+      <pre id="demo-output" class="demo-output hidden"></pre>
+    </div>
+  </section>
+
+  <button id="new-returns" class="new-returns hidden" type="button">NEW RETURNS ↓</button>
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
