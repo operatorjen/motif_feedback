@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -520,6 +521,33 @@ def test_agent_memory_loops_are_private_and_sequenced(tmp_path: Path):
     assert all(event["agent_id"] == "agent_a" for event in agent_a)
     assert storage.memory_stats(project["id"])["agent_b"]["action_count"] == 1
     assert storage.memory_stats(project["id"])["agent_b"]["failure_count"] == 1
+
+
+def test_project_scoped_reads_validate_and_query_with_one_connection(tmp_path: Path):
+    _, storage, _, _ = make_services(tmp_path)
+    project = storage.create_project("Efficient reads")
+    storage.add_message(project["id"], "user", "hello")
+    storage.add_memory_event(
+        project["id"],
+        "agent_a",
+        "user-1",
+        outcome="response",
+        trigger_text="hello",
+        return_text="return",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
+
+    for read in (
+        lambda: storage.list_messages(project["id"]),
+        lambda: storage.recent_messages(project["id"], 30),
+        lambda: storage.list_memory_events(project["id"], "agent_a"),
+        lambda: storage.memory_stats(project["id"]),
+    ):
+        with patch.object(storage, "connection", wraps=storage.connection) as connection:
+            assert read()
+            assert connection.call_count == 1
 
 
 def test_cross_project_memory_is_compact_provisional_and_source_labeled(tmp_path: Path):

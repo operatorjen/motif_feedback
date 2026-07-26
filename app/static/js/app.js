@@ -317,15 +317,19 @@ function fileToolActivity(toolEvents = []) {
 
 function renderToolActivity(toolEvents = []) {
   const activities = fileToolActivity(toolEvents);
-  const failures = toolEvents.filter((event, index) => {
-    if (event.result?.ok !== false) return false;
+  const failures = [];
+  const laterSuccessfulTools = new Set();
+  for (let index = toolEvents.length - 1; index >= 0; index -= 1) {
+    const event = toolEvents[index];
+    if (event.result?.ok !== false) {
+      laterSuccessfulTools.add(event.tool);
+      continue;
+    }
     const retryable = event.result?.retryable
       || /(?:unterminated string|invalid json|json.*(?:decode|delimiter))/i.test(event.result?.error || "");
-    if (!retryable) return true;
-    return !toolEvents.slice(index + 1).some(
-      (later) => later.tool === event.tool && later.result?.ok !== false,
-    );
-  });
+    if (!retryable || !laterSuccessfulTools.has(event.tool)) failures.push(event);
+  }
+  failures.reverse();
   if (!activities.length && !failures.length) return null;
 
   const box = document.createElement("div");
@@ -592,7 +596,6 @@ function renderMessages(messages) {
   const viewport = projectChanged
     ? { follow: true, scrollTop: 0 }
     : captureMessagesViewport();
-  elements.messages.replaceChildren();
   if (!messages.length) {
     const empty = document.createElement("div");
     empty.className = "empty-room";
@@ -601,12 +604,14 @@ function renderMessages(messages) {
     const copy = document.createElement("p");
     copy.textContent = "Speak to everyone, address one agent by name, ask for current research, or ask them to create a file in this project.";
     empty.append(title, copy);
-    elements.messages.append(empty);
+    elements.messages.replaceChildren(empty);
     state.renderedProject = state.currentProject;
     elements.newReturns.classList.add("hidden");
     return;
   }
-  for (const message of messages) elements.messages.append(renderMessage(message));
+  const fragment = document.createDocumentFragment();
+  for (const message of messages) fragment.append(renderMessage(message));
+  elements.messages.replaceChildren(fragment);
   state.renderedProject = state.currentProject;
   restoreMessagesViewport(viewport, !projectChanged);
 }
@@ -618,14 +623,14 @@ async function loadMessages() {
 
 async function loadFiles() {
   const files = await api(`/api/files/${encodeURIComponent(state.currentProject)}`);
-  elements.fileList.replaceChildren();
   if (!files.length) {
     const empty = document.createElement("p");
     empty.className = "microcopy";
     empty.textContent = "No project files yet.";
-    elements.fileList.append(empty);
+    elements.fileList.replaceChildren(empty);
     return;
   }
+  const fragment = document.createDocumentFragment();
   for (const file of files) {
     const row = document.createElement("div");
     row.className = "file-row";
@@ -733,8 +738,9 @@ async function loadFiles() {
     });
     actions.append(download, remove);
     row.append(button, actions);
-    elements.fileList.append(row);
+    fragment.append(row);
   }
+  elements.fileList.replaceChildren(fragment);
 }
 
 async function openWebSource(sourceId) {
@@ -766,14 +772,14 @@ async function openWebSource(sourceId) {
 
 async function loadSources() {
   const sources = await api(`/api/web-sources/${encodeURIComponent(state.currentProject)}`);
-  elements.sourceList.replaceChildren();
   if (!sources.length) {
     const empty = document.createElement("p");
     empty.className = "microcopy";
     empty.textContent = "No supplied web pages stored in this project yet.";
-    elements.sourceList.append(empty);
+    elements.sourceList.replaceChildren(empty);
     return;
   }
+  const fragment = document.createDocumentFragment();
   for (const source of sources) {
     const row = document.createElement("div");
     row.className = "source-row";
@@ -806,8 +812,9 @@ async function loadSources() {
       }
     });
     row.append(open, remove);
-    elements.sourceList.append(row);
+    fragment.append(row);
   }
+  elements.sourceList.replaceChildren(fragment);
 }
 
 async function loadPersona() {
@@ -844,13 +851,13 @@ async function loadMemoryLoop() {
   }
   elements.memoryLoopSummary.append(title, stages, metrics, observes);
 
-  elements.memoryLoopEvents.replaceChildren();
   if (!data.events?.length) {
     const empty = document.createElement("p");
     empty.className = "microcopy";
     empty.textContent = "No returns stored for this agent in this project yet.";
-    elements.memoryLoopEvents.append(empty);
+    elements.memoryLoopEvents.replaceChildren(empty);
   } else {
+    const fragment = document.createDocumentFragment();
     for (const event of data.events) {
       const entry = document.createElement("details");
       entry.className = "memory-loop-event";
@@ -870,20 +877,21 @@ async function loadMemoryLoop() {
         actions.textContent = `ACTIONS: ${event.actions.map((action) => `${action.tool}${action.path ? ` (${action.path})` : ""}`).join(" · ")}`;
         entry.append(actions);
       }
-      elements.memoryLoopEvents.append(entry);
+      fragment.append(entry);
     }
+    elements.memoryLoopEvents.replaceChildren(fragment);
   }
 
   const globalStats = data.global_stats || {};
   elements.globalMemorySummary.textContent = `${globalStats.event_count || 0} COMPACT RETURNS · ${globalStats.project_count || 0} SOURCE PROJECTS`;
-  elements.globalMemoryEvents.replaceChildren();
   if (!data.global_events?.length) {
     const empty = document.createElement("p");
     empty.className = "microcopy";
     empty.textContent = "No cross-project continuity returns stored yet.";
-    elements.globalMemoryEvents.append(empty);
+    elements.globalMemoryEvents.replaceChildren(empty);
     return;
   }
+  const fragment = document.createDocumentFragment();
   for (const event of data.global_events) {
     const entry = document.createElement("details");
     entry.className = "memory-loop-event global-memory-event";
@@ -903,8 +911,9 @@ async function loadMemoryLoop() {
       actions.textContent = `ACTIONS: ${event.actions.map((action) => `${action.tool}${action.path ? ` (${action.path})` : ""}`).join(" · ")}`;
       entry.append(actions);
     }
-    elements.globalMemoryEvents.append(entry);
+    fragment.append(entry);
   }
+  elements.globalMemoryEvents.replaceChildren(fragment);
 }
 
 async function loadSharedContext() {

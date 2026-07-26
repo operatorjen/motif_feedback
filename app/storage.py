@@ -614,9 +614,9 @@ class Storage:
         agent_id: str,
         limit: int = DEFAULT_MEMORY_EVENT_LIMIT,
     ) -> list[dict]:
-        self.get_project(project_id)
         safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT id, project_id, agent_id, user_message_id, sequence, outcome,
@@ -763,8 +763,8 @@ class Storage:
         return {"agent_id": agent_id, **dict(row)}
 
     def memory_stats(self, project_id: str) -> dict[str, dict]:
-        self.get_project(project_id)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT agent_id, COUNT(*) AS event_count,
@@ -927,11 +927,19 @@ class Storage:
         return [dict(row) for row in rows]
 
     def get_project(self, project_id: str) -> dict:
-        identifier = self.validate_project_id(project_id)
         with self.connection() as connection:
-            row = connection.execute(
-                "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?", (identifier,)
-            ).fetchone()
+            return self._project_from_connection(connection, project_id)
+
+    def _project_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        project_id: str,
+    ) -> dict:
+        identifier = self.validate_project_id(project_id)
+        row = connection.execute(
+            "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?",
+            (identifier,),
+        ).fetchone()
         if row is None:
             raise StorageError("Project not found.")
         return dict(row)
@@ -1062,9 +1070,9 @@ class Storage:
         project_id: str,
         limit: int = DEFAULT_STORAGE_MESSAGE_LIMIT,
     ) -> list[dict]:
-        self.get_project(project_id)
         safe_limit = min(max(limit, 1), MAX_PROJECT_MESSAGE_LIMIT)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT id, project_id, role, agent_id, content,
@@ -1084,9 +1092,9 @@ class Storage:
         return [self._row_to_message(row) for row in rows]
 
     def recent_messages(self, project_id: str, limit: int) -> list[dict]:
-        self.get_project(project_id)
         safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT id, project_id, role, agent_id, content,
