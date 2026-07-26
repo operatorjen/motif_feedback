@@ -1,0 +1,67 @@
+schema_version: 1
+providers:
+  - id: moonshot
+    label: Moonshot / Kimi
+    enabled: true
+    base_url: https://api.moonshot.ai/v1
+    api_key_env: MOONSHOT_API_KEY
+    api_key_required: true
+    models:
+      - kimi-k3
+      - kimi-k2.6
+    token_parameter: max_tokens
+    supports_temperature: true
+    supports_tools: true
+    reasoning_effort: null
+
+  - id: gemini
+    label: Google / Gemini
+    enabled: true
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    api_key_env: GEMINI_API_KEY
+    api_key_required: true
+    models:
+      - gemini-3.5-flash
+    token_parameter: max_tokens
+    supports_temperature: true
+    supports_tools: true
+    reasoning_effort: null
+
+  - id: deepseek
+    label: DeepSeek
+    enabled: true
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY
+    api_key_required: true
+    models:
+      - deepseek-v4-pro
+    token_parameter: max_tokens
+    supports_temperature: true
+    supports_tools: true
+    reasoning_effort: null
+
+  - id: openai
+    label: OpenAI / ChatGPT
+    enabled: true
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    api_key_required: true
+    models:
+      - gpt-5.2
+    token_parameter: max_completion_tokens
+    supports_temperature: false
+    supports_tools: true
+    reasoning_effort: none
+
+  # Enable and adjust this profile for an OpenAI-compatible local server.
+  - id: local
+    label: Local OpenAI-compatible
+    enabled: false
+    base_url: http://host.docker.internal:11434/v1
+    api_key_env: ""
+    api_key_required: false
+    models: []
+    token_parameter: max_tokens
+    supports_temperature: true
+    supports_tools: true
+    reasoning_effort: null

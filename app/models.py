@@ -52,9 +52,7 @@ def normalize_provider_model(provider: str, model: str) -> tuple[ProviderName, s
     return normalized_provider, normalized_model
 
 
-class RuntimeConfig(BaseModel):
-    providers: dict[str, ProviderName]
-    models: dict[str, str]
+class RuntimeOptions(BaseModel):
     default_research_mode: ResearchMode = "auto"
     room_default_participants: list[str] = Field(default_factory=lambda: list(AGENT_IDS))
     temperature: float = Field(
@@ -63,6 +61,19 @@ class RuntimeConfig(BaseModel):
     max_tokens: int = Field(
         default=DEFAULT_MAX_TOKENS, ge=MIN_MAX_TOKENS, le=MAX_MAX_TOKENS
     )
+
+    @field_validator("room_default_participants")
+    @classmethod
+    def validate_participants(cls, value: list[str]) -> list[str]:
+        unique = [agent_id for agent_id in AGENT_IDS if agent_id in value]
+        return unique or list(AGENT_IDS)
+
+
+class RuntimeConfig(RuntimeOptions):
+    """A complete, user-saved provider and model configuration."""
+
+    providers: dict[str, ProviderName]
+    models: dict[str, str]
 
     @field_validator("models")
     @classmethod
@@ -89,13 +100,6 @@ class RuntimeConfig(BaseModel):
                 raise ValueError(f"A valid provider ID is required for {agent_id}.")
             normalized[agent_id] = provider
         return normalized
-
-    @field_validator("room_default_participants")
-    @classmethod
-    def validate_participants(cls, value: list[str]) -> list[str]:
-        unique = [agent_id for agent_id in AGENT_IDS if agent_id in value]
-        return unique or list(AGENT_IDS)
-
 
 class SetupUpdate(RuntimeConfig):
     """Validated runtime settings accepted by the setup endpoint."""

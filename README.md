@@ -133,8 +133,10 @@ workspace/
 ```
 
 This includes the SQLite database, runtime configuration, provider catalog, personas, shared
-context, persona history and proposals, projects, files, and supplied-page snapshots. The first
-startup initializes this state from `app/seed/`; afterward, the workspace copies are persistent.
+context, persona history and proposals, projects, files, and supplied-page snapshots. Seeded
+personas, shared context, and the provider catalog are copied from `app/seed/` on first startup.
+The runtime configuration is created only after you save provider and model selections in
+**SETUP**. Afterward, all workspace state is persistent.
 
 Back up `workspace/` to preserve the complete local state. Keep `.env` separate because it may
 contain provider secrets.
