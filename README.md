@@ -1,5 +1,7 @@
 # Motif Feedback
 
+![⟁](https://aesxarg.net/taste-as-system-sm.jpg)
+
 Motif Feedback is a local-first, single-user application for talking with three persistent
 agents in one conversational room. It is designed for long-running work that benefits from
 distinct perspectives, project continuity, and reflection over time.
