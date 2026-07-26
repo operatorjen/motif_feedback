@@ -1,0 +1,29 @@
+services:
+  app:
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+      - --no-server-header
+      - --no-proxy-headers
+
+    volumes:
+      - type: bind
+        source: ./app
+        target: /app/app
+        read_only: true
+
+  runner:
+    volumes:
+      - type: bind
+        source: ./runner/service.py
+        target: /runner-app/service.py
+        read_only: true

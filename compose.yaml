@@ -1,0 +1,130 @@
+name: local-motif-feedback
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local-motif-feedback:latest
+    container_name: local-motif-feedback
+    init: true
+    restart: unless-stopped
+    depends_on:
+      runner:
+        condition: service_healthy
+
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+
+    env_file:
+      - .env
+
+    environment:
+      WORKSPACE_ROOT: /workspace
+
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      - type: bind
+        source: ./workspace
+        target: /workspace
+      - type: volume
+        source: runner_socket
+        target: /workspace/runner
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=${APP_TMPFS_SIZE:-128m},mode=1777,noexec,nosuid,nodev
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    pids_limit: "${APP_PIDS_LIMIT:-256}"
+    mem_limit: "${APP_MEMORY_LIMIT:-2g}"
+    cpus: "${APP_CPUS:-2.0}"
+    stop_grace_period: "${APP_STOP_GRACE_PERIOD:-20s}"
+
+    ulimits:
+      nofile:
+        soft: "${APP_NOFILE_LIMIT:-4096}"
+        hard: "${APP_NOFILE_LIMIT:-4096}"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "${APP_LOG_MAX_SIZE:-10m}"
+        max-file: "${APP_LOG_MAX_FILES:-3}"
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: local-motif-feedback-runner:latest
+    container_name: local-motif-feedback-runner
+    init: true
+    restart: unless-stopped
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    environment:
+      RUNNER_SOCKET_PATH: /runner/runner.sock
+      RUNNER_EXECUTION_TIMEOUT_SECONDS: "${RUNNER_EXECUTION_TIMEOUT_SECONDS:-60}"
+      RUNNER_PROJECT_MAX_BYTES: "${RUNNER_PROJECT_MAX_BYTES:-8000000}"
+      RUNNER_OUTPUT_MAX_BYTES: "${RUNNER_OUTPUT_MAX_BYTES:-64000}"
+      RUNNER_INPUT_MAX_BYTES: "${RUNNER_INPUT_MAX_BYTES:-16000}"
+      RUNNER_INPUT_MESSAGE_MAX_BYTES: "${RUNNER_INPUT_MESSAGE_MAX_BYTES:-4000}"
+      RUNNER_ARGUMENT_MAX_COUNT: "${RUNNER_ARGUMENT_MAX_COUNT:-24}"
+      RUNNER_ARGUMENT_MAX_CHARS: "${RUNNER_ARGUMENT_MAX_CHARS:-500}"
+      RUNNER_ARGUMENTS_MAX_BYTES: "${RUNNER_ARGUMENTS_MAX_BYTES:-4000}"
+      RUNNER_REQUEST_MAX_BYTES: "${RUNNER_REQUEST_MAX_BYTES:-8500000}"
+      RUNNER_ROLE_SIGNAL_MAX_COUNT: "${RUNNER_ROLE_SIGNAL_MAX_COUNT:-16}"
+      RUNNER_CHILD_CPU_SECONDS: "${RUNNER_CHILD_CPU_SECONDS:-5}"
+      RUNNER_CHILD_FILE_MAX_BYTES: "${RUNNER_CHILD_FILE_MAX_BYTES:-8000000}"
+      RUNNER_CHILD_OPEN_FILE_LIMIT: "${RUNNER_CHILD_OPEN_FILE_LIMIT:-32}"
+      RUNNER_CHILD_MEMORY_MAX_BYTES: "${RUNNER_CHILD_MEMORY_MAX_BYTES:-256000000}"
+      RUNNER_CHILD_PROCESS_LIMIT: "${RUNNER_CHILD_PROCESS_LIMIT:-16}"
+      RUNNER_STREAM_READ_BYTES: "${RUNNER_STREAM_READ_BYTES:-4096}"
+      RUNNER_CONTROL_READ_BYTES: "${RUNNER_CONTROL_READ_BYTES:-4096}"
+      RUNNER_SELECT_POLL_SECONDS: "${RUNNER_SELECT_POLL_SECONDS:-0.05}"
+      RUNNER_ERROR_DETAIL_MAX_CHARS: "${RUNNER_ERROR_DETAIL_MAX_CHARS:-2000}"
+    network_mode: none
+    read_only: true
+    volumes:
+      - type: volume
+        source: runner_socket
+        target: /runner
+    tmpfs:
+      - /tmp:size=${RUNNER_TMPFS_SIZE:-64m},mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: "${RUNNER_PIDS_LIMIT:-32}"
+    mem_limit: "${RUNNER_MEMORY_LIMIT:-384m}"
+    cpus: "${RUNNER_CPUS:-0.5}"
+    stop_grace_period: "${RUNNER_STOP_GRACE_PERIOD:-5s}"
+    ulimits:
+      nofile:
+        soft: "${RUNNER_NOFILE_LIMIT:-64}"
+        hard: "${RUNNER_NOFILE_LIMIT:-64}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from pathlib import Path; raise SystemExit(0 if Path('/runner/runner.sock').is_socket() else 1)"
+      interval: "${RUNNER_HEALTH_INTERVAL:-10s}"
+      timeout: "${RUNNER_HEALTH_TIMEOUT:-2s}"
+      retries: "${RUNNER_HEALTH_RETRIES:-3}"
+      start_period: "${RUNNER_HEALTH_START_PERIOD:-5s}"
+
+volumes:
+  runner_socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=${RUNNER_SOCKET_VOLUME_SIZE:-1m},uid=${APP_UID:-10001},gid=${APP_GID:-10001},mode=0770,nosuid,nodev,noexec"
