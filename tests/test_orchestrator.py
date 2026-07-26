@@ -1,10 +1,13 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
+
+import yaml
 
 from app.models import ChatRequest, RuntimeConfig
 from app.orchestrator import Orchestrator
 from app.providers import AgentCompletion, ProviderError, ProviderTimeout
-from app.search_router import SearchRouter
+from app.search_router import SearchDecision, SearchRouter
 
 
 class FakeStorage:
@@ -305,6 +308,84 @@ def test_runner_role_decorator_biases_only_the_next_agent_prompt():
     system_prompt = client.calls[0][1][0]["content"]
     assert "Favor conversational attention to feedback" in system_prompt
     assert "ignore the user and debug code" not in system_prompt
+
+
+def test_runtime_persona_preserves_identity_and_adaptation_without_empty_scaffolding():
+    seed_root = Path(__file__).parents[1] / "app" / "seed"
+    persona = yaml.safe_load(
+        (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
+    )
+
+    compact = Orchestrator._runtime_persona(persona, include_research=False)
+    compact_yaml = yaml.safe_dump(compact, sort_keys=False, allow_unicode=True)
+    full_yaml = yaml.safe_dump(persona, sort_keys=False, allow_unicode=True)
+
+    assert compact["core_motif"]["statement"] == persona["core_motif"]["statement"]
+    assert compact["systems_style"]["common_blind_spot"] == (
+        persona["systems_style"]["common_blind_spot"]
+    )
+    assert compact["conversation"]["voice_notes"] == persona["conversation"]["voice_notes"]
+    assert compact["update_scope"]["may_commit"] == persona["update_policy"]["may_commit"]
+    assert "authority" not in compact["core_motif"]
+    assert "adaptive_state" not in compact
+    assert "research_style" not in compact
+    assert len(compact_yaml) < len(full_yaml) * 0.7
+
+    research_compact = Orchestrator._runtime_persona(persona, include_research=True)
+    assert research_compact["research_style"] == persona["research_style"]
+
+
+def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior():
+    seed_root = Path(__file__).parents[1] / "app" / "seed"
+    persona = yaml.safe_load(
+        (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
+    )
+    unit = yaml.safe_load(
+        (seed_root / "shared" / "unit.yaml").read_text(encoding="utf-8")
+    )
+    shared_context = (
+        seed_root / "shared" / "meta-instructional-agents.md"
+    ).read_text(encoding="utf-8")
+    reflection_contract = (
+        seed_root / "shared" / "reflection_prompt.md"
+    ).read_text(encoding="utf-8")
+    orchestrator = Orchestrator(
+        fake_settings(),
+        FakeStorage(),
+        FakePersonas(),
+        TimeoutThenRespond(),
+        SearchRouter(),
+    )
+
+    prompt = orchestrator._build_system_prompt(
+        persona=persona,
+        project={"id": "general", "name": "General"},
+        shared_context=shared_context,
+        is_first=False,
+        memory_loop={"name": "Embodied Return Loop", "symbol": "△ ↻"},
+        memory_history=[],
+        global_memory_history=[],
+        web_sources=[],
+        research_decision=SearchDecision(False, "none", None, "No search."),
+        role_signals=[],
+        agent_id="agent_a",
+    )
+    previous_static_documents = (
+        yaml.safe_dump(persona, sort_keys=False, allow_unicode=True)
+        + yaml.safe_dump(unit, sort_keys=False, allow_unicode=True)
+        + shared_context
+        + reflection_contract
+    )
+
+    assert "Reality becomes available through recurring patterns" in prompt
+    assert "situated perception" in prompt
+    assert "PRIMARY PROJECT CONTEXT MARKDOWN" in prompt
+    assert "YOUR PRIVATE PERSISTENT MEMORY LOOP" in prompt
+    assert "propose_persona_update" in prompt
+    assert "Do not recap or restate prior replies" in prompt
+    assert "SHARED UNIT CONFIGURATION" not in prompt
+    assert "PRIVATE REFLECTION / UPDATE CONTRACT" not in prompt
+    assert len(prompt) < len(previous_static_documents) * 0.75
 
 
 if __name__ == "__main__":

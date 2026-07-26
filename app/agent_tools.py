@@ -94,16 +94,11 @@ USER_TOOL_DEFINITIONS = [
         "function": {
             "name": "write_project_file",
             "description": (
-                "Create a UTF-8 text or code file inside the current project's permitted folder. "
-                "For a requested graphic, create a self-contained .svg using shapes, paths, and "
-                "text; scripts, embedded HTML, external resources, and network references are forbidden. "
-                "Only write when the user has asked to save or create an artifact. You may freely "
-                "revise files you created. You may revise another agent-created file only when the "
-                "user has explicitly enabled shared editing for that exact file; ownership remains with "
-                "its creator. You cannot overwrite user files or delete project files. Agent-owned "
-                "files have a strict size cap; "
-                "when a file approaches it, reread and consolidate the whole file instead of "
-                "appending indefinitely."
+                "Create or revise a permitted UTF-8 project file only when the user requested a "
+                "saved artifact. You may revise your own files or an exact agent file the user "
+                "shared, but never uploaded user files. Agent files have a strict size cap; "
+                "consolidate instead of splitting or appending indefinitely. SVG must be "
+                "self-contained and contain no scripts, embedded HTML, or external resources."
             ),
             "parameters": {
                 "type": "object",
@@ -121,10 +116,9 @@ USER_TOOL_DEFINITIONS = [
         "function": {
             "name": "propose_persona_update",
             "description": (
-                "Save a justified update to your own current position, motif expression, "
-                "relationship memory, current continuity cycle, or self-model. Protected "
-                "peripheral identity changes become review proposals. Your core_motif is locked and "
-                "user-owned. Use rarely and only when the exchange contains durable return signals."
+                "Save a justified update to your own permitted adaptive persona fields. Some "
+                "changes commit immediately and protected peripheral changes become proposals. "
+                "Your core_motif is locked. Use rarely and only after a durable return signal."
             ),
             "parameters": {
                 "type": "object",

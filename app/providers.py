@@ -235,10 +235,10 @@ class DirectProviderClient:
                     "role": "user",
                     "content": (
                         "You are a selected participant and must take a visible turn. Do not pass, remain "
-                        "silent, or return an empty answer. Respond conversationally from your own lens. "
-                        "Agreement is allowed; if prior replies cover the topic, state what you agree with "
-                        "and add a question, implication, or observation. If you used project tools, "
-                        "synthesize what you did and mention any file you created or changed."
+                        "silent, or return an empty answer. Respond briefly from your own lens without "
+                        "recapping prior replies. Agreement is allowed; add only a useful question, "
+                        "implication, or observation. If you used project tools, synthesize what you did "
+                        "and mention any file you created or changed."
                     ),
                 }
             )
