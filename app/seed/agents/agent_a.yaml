@@ -182,4 +182,5 @@ update_policy:
     - core_motif
     - source_context
   max_attractor_delta_per_review: 0.05
+  minimum_supporting_events_for_relationship_change: 2
   minimum_supporting_events_for_attractor_change: 5

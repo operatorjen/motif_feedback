@@ -90,16 +90,8 @@ class FakePersonas:
         return {"agent_id": agent_id, "display_name": agent_id.replace("_", " ").title()}
 
     @staticmethod
-    def load_unit():
-        return {}
-
-    @staticmethod
     def load_shared_context():
         return "Test context"
-
-    @staticmethod
-    def load_reflection_contract():
-        return "Test contract"
 
 
 class TimeoutThenRespond:
@@ -335,19 +327,98 @@ def test_runtime_persona_preserves_identity_and_adaptation_without_empty_scaffol
     assert research_compact["research_style"] == persona["research_style"]
 
 
+def test_memory_selection_uses_compact_references_for_transcript_duplicates():
+    events = [
+        {
+            "id": "recent-duplicate",
+            "user_message_id": "user-1",
+            "sequence": 3,
+            "trigger_text": "feedback threshold",
+            "return_text": "recent duplicate",
+        },
+        {
+            "id": "relevant-older",
+            "user_message_id": "user-2",
+            "sequence": 1,
+            "trigger_text": "threshold behavior",
+            "return_text": "feedback signal changed",
+        },
+        {
+            "id": "irrelevant-newer",
+            "user_message_id": "user-3",
+            "sequence": 2,
+            "trigger_text": "embodied atmosphere",
+            "return_text": "situated texture",
+        },
+    ]
+    recent = [
+        {
+            "role": "agent",
+            "agent_id": "agent_a",
+            "metadata": {"user_message_id": "user-1"},
+        }
+    ]
+
+    selected = Orchestrator._select_memory_history(
+        events,
+        query="How did the feedback threshold change?",
+        limit=2,
+        recent=recent,
+        agent_id="agent_a",
+    )
+
+    assert [event["id"] for event in selected] == [
+        "recent-duplicate",
+        "relevant-older",
+    ]
+    formatted = Orchestrator._format_memory_history(selected)
+    assert "event(s) recent-duplicate" in formatted
+    assert "already represented in the room transcript" in formatted
+    assert "recent duplicate" not in formatted
+    assert "event(s) relevant-older" in formatted
+
+
+def test_memory_context_consolidates_beats_without_changing_the_raw_ledger():
+    raw_events = [
+        {
+            "id": "beat-2",
+            "project_id": "project",
+            "user_message_id": "user-1",
+            "sequence": 2,
+            "outcome": "action_response",
+            "trigger_text": "Continue naturally.",
+            "return_text": "Second beat.",
+            "actions": [{"tool": "read_project_file", "path": "note.md", "ok": True}],
+        },
+        {
+            "id": "beat-1",
+            "project_id": "project",
+            "user_message_id": "user-1",
+            "sequence": 1,
+            "outcome": "response",
+            "trigger_text": "Continue naturally.",
+            "return_text": "First beat.",
+            "actions": [],
+        },
+    ]
+
+    consolidated = Orchestrator._consolidate_memory_turns(raw_events)
+
+    assert len(raw_events) == 2
+    assert len(consolidated) == 1
+    assert consolidated[0]["_evidence_event_ids"] == ["beat-1", "beat-2"]
+    assert consolidated[0]["return_text"] == "First beat.\n\nSecond beat."
+    assert consolidated[0]["outcome"] == "response+action_response"
+    assert consolidated[0]["actions"][0]["path"] == "note.md"
+
+
 def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior():
     seed_root = Path(__file__).parents[1] / "app" / "seed"
     persona = yaml.safe_load(
         (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
     )
-    unit = yaml.safe_load(
-        (seed_root / "shared" / "unit.yaml").read_text(encoding="utf-8")
-    )
     shared_context = (
         seed_root / "shared" / "meta-instructional-agents.md"
-    ).read_text(encoding="utf-8")
-    reflection_contract = (
-        seed_root / "shared" / "reflection_prompt.md"
     ).read_text(encoding="utf-8")
     orchestrator = Orchestrator(
         fake_settings(),
@@ -370,13 +441,6 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
         role_signals=[],
         agent_id="agent_a",
     )
-    previous_static_documents = (
-        yaml.safe_dump(persona, sort_keys=False, allow_unicode=True)
-        + yaml.safe_dump(unit, sort_keys=False, allow_unicode=True)
-        + shared_context
-        + reflection_contract
-    )
-
     assert "Reality becomes available through recurring patterns" in prompt
     assert "situated perception" in prompt
     assert "PRIMARY PROJECT CONTEXT MARKDOWN" in prompt
@@ -385,7 +449,8 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
     assert "Do not recap or restate prior replies" in prompt
     assert "SHARED UNIT CONFIGURATION" not in prompt
     assert "PRIVATE REFLECTION / UPDATE CONTRACT" not in prompt
-    assert len(prompt) < len(previous_static_documents) * 0.75
+    assert not (seed_root / "shared" / "unit.yaml").exists()
+    assert not (seed_root / "shared" / "reflection_prompt.md").exists()
 
 
 if __name__ == "__main__":

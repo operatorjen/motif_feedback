@@ -6,7 +6,9 @@ import shutil
 import threading
 from copy import deepcopy
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
@@ -22,8 +24,12 @@ from .constants import (
 )
 from .models import AGENT_IDS, PersonaUpdate
 
+if TYPE_CHECKING:
+    from .storage import Storage
+
 PERSONA_SCHEMA_VERSION = 4
-REFLECTION_CONTRACT_VERSION = 5
+DEFAULT_RELATIONSHIP_EVIDENCE_EVENTS = 2
+ACTIVE_CANDIDATE_STATUSES = {"dormant", "pending_user_review"}
 
 AUTO_COMMIT_PREFIXES = (
     "current_position",
@@ -62,8 +68,9 @@ def timestamp_id() -> str:
 
 
 class PersonaStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, storage: Storage | None = None) -> None:
         self.settings = settings
+        self.storage = storage
         self._lock = threading.RLock()
 
     def initialize(self) -> None:
@@ -89,46 +96,15 @@ class PersonaStore:
                     raise PersonaUpdateError("Persona YAML must contain a mapping.")
                 self._validate_persona(agent_id, data)
 
-        self._install_or_migrate_shared_file("unit.yaml", yaml_schema_check=True)
-        self._install_or_migrate_shared_file(
-            "reflection_prompt.md",
-            required_marker=f"Contract version: {REFLECTION_CONTRACT_VERSION}",
-        )
-        self._install_or_migrate_shared_file("meta-instructional-agents.md")
+        self._install_shared_file("meta-instructional-agents.md")
 
-    def _install_or_migrate_shared_file(
-        self,
-        filename: str,
-        *,
-        yaml_schema_check: bool = False,
-        required_marker: str | None = None,
-    ) -> None:
-        """Install current shared contracts while snapshotting any older version."""
+    def _install_shared_file(self, filename: str) -> None:
+        """Install user-editable shared context on first startup."""
         source = self.settings.seed_root / "shared" / filename
         destination = self.settings.shared_root / filename
         if not destination.exists():
             shutil.copy2(source, destination)
             destination.chmod(0o600)
-            return
-
-        should_migrate = False
-        try:
-            if yaml_schema_check:
-                data = yaml.safe_load(destination.read_text(encoding="utf-8")) or {}
-                should_migrate = int(data.get("schema_version", 0)) < PERSONA_SCHEMA_VERSION
-            elif required_marker is not None:
-                should_migrate = required_marker not in destination.read_text(encoding="utf-8")
-        except (OSError, ValueError, yaml.YAMLError):
-            should_migrate = True
-
-        if not should_migrate:
-            return
-
-        migration_root = self.settings.history_root / "migrations"
-        migration_root.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(destination, migration_root / f"{timestamp_id()}_{filename}")
-        shutil.copy2(source, destination)
-        destination.chmod(0o600)
 
     def _agent_file(self, agent_id: str) -> Path:
         if agent_id not in AGENT_IDS:
@@ -139,23 +115,12 @@ class PersonaStore:
             raise PersonaUpdateError("Persona files may not be symbolic links.")
         return path
 
-    def load_unit(self) -> dict:
-        path = self.settings.shared_root / "unit.yaml"
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-
     def load_shared_context(self) -> str:
         path = self.settings.shared_root / "meta-instructional-agents.md"
         try:
             return path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return "[No shared project-context markdown is installed.]"
-
-    def load_reflection_contract(self) -> str:
-        path = self.settings.shared_root / "reflection_prompt.md"
-        try:
-            return path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return "[No reflection contract is installed.]"
 
     def save_user_shared_context(self, markdown_text: str) -> dict:
         normalized = markdown_text.strip() + "\n"
@@ -229,17 +194,28 @@ class PersonaStore:
                     "changes": [{"path": "*", "operation": "replace", "value": "manual_yaml_edit"}],
                 },
             )
+            self._reconcile_dormant_candidates(
+                agent_id,
+                previous,
+                parsed,
+                resolution_actor="user_edit",
+            )
             return self.load_persona(agent_id)
 
-    def submit_update(self, update: PersonaUpdate | dict) -> dict:
+    def submit_update(
+        self,
+        update: PersonaUpdate | dict,
+        *,
+        project_id: str | None = None,
+    ) -> dict:
         normalized = update if isinstance(update, PersonaUpdate) else PersonaUpdate.model_validate(update)
         agent_id = normalized.agent_id
 
         with self._lock:
             current = self.load_persona(agent_id)
             revised = deepcopy(current)
-            auto_changes: list[dict] = []
-            reviewed_changes: list[dict] = []
+            potentially_automatic_changes: list[dict] = []
+            dormant_changes: list[dict] = []
 
             for change_model in normalized.changes:
                 change = change_model.model_dump()
@@ -250,12 +226,28 @@ class PersonaStore:
                         f"Agent may not update locked constitutional field: {path}"
                     )
                 if self._path_allowed(path, AUTO_COMMIT_PREFIXES):
-                    auto_changes.append(change)
+                    potentially_automatic_changes.append(change)
                 elif self._path_allowed(path, PROPOSAL_ONLY_PREFIXES):
                     self._validate_attractor_delta(current, path, change["value"])
-                    reviewed_changes.append(change)
+                    dormant_changes.append(change)
                 else:
                     raise PersonaUpdateError(f"Agent may not update: {path}")
+
+            verified_evidence = self._validate_evidence(
+                agent_id,
+                project_id,
+                normalized.evidence,
+            )
+            auto_changes: list[dict] = []
+            for change in potentially_automatic_changes:
+                required_evidence = self._required_evidence_count(
+                    current,
+                    change["path"],
+                )
+                if len(verified_evidence) >= required_evidence:
+                    auto_changes.append(change)
+                else:
+                    dormant_changes.append(change)
 
             operation_timestamp = timestamp_id()
             if auto_changes:
@@ -272,31 +264,31 @@ class PersonaStore:
                         "timestamp": operation_timestamp,
                         "actor": agent_id,
                         "reason": normalized.reason,
-                        "evidence": [item.model_dump() for item in normalized.evidence],
+                        "evidence": verified_evidence,
                         "changes": auto_changes,
                     },
                 )
+                self._reconcile_dormant_candidates(
+                    agent_id,
+                    current,
+                    revised,
+                    resolution_actor="policy_commit",
+                )
 
             proposal_path: Path | None = None
-            if reviewed_changes:
-                proposal = {
-                    "timestamp": operation_timestamp,
-                    "status": "pending_user_review",
-                    "agent_id": agent_id,
-                    "reason": normalized.reason,
-                    "evidence": [item.model_dump() for item in normalized.evidence],
-                    "changes": reviewed_changes,
-                }
-                proposal_path = self.settings.proposals_root / f"{operation_timestamp}_{agent_id}.json"
-                proposal_path.write_text(
-                    json.dumps(proposal, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
+            if dormant_changes:
+                proposal_path = self._save_dormant_candidate(
+                    agent_id=agent_id,
+                    reason=normalized.reason,
+                    evidence=verified_evidence,
+                    changes=dormant_changes,
+                    current=current,
+                    operation_timestamp=operation_timestamp,
                 )
-                proposal_path.chmod(0o600)
 
             return {
                 "committed_change_count": len(auto_changes),
-                "proposal_change_count": len(reviewed_changes),
+                "proposal_change_count": len(dormant_changes),
                 "proposal_path": proposal_path.name if proposal_path else None,
             }
 
@@ -305,11 +297,228 @@ class PersonaStore:
         for path in sorted(self.settings.proposals_root.glob("*.json"), reverse=True):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
+                if data.get("status") not in ACTIVE_CANDIDATE_STATUSES:
+                    continue
                 data["file"] = path.name
                 proposals.append(data)
             except (json.JSONDecodeError, OSError):
                 continue
         return proposals[:MAX_PERSONA_PROPOSALS]
+
+    def _validate_evidence(
+        self,
+        agent_id: str,
+        project_id: str | None,
+        evidence,
+    ) -> list[dict]:
+        if self.storage is None or not project_id:
+            raise PersonaUpdateError(
+                "Persona updates require project-scoped stored evidence."
+            )
+        evidence_items = [item.model_dump() for item in evidence]
+        event_ids = [item["event_id"] for item in evidence_items]
+        if len(set(event_ids)) != len(event_ids):
+            raise PersonaUpdateError("Persona-update evidence IDs must be distinct.")
+        try:
+            resolved = self.storage.validate_agent_memory_evidence(
+                project_id,
+                agent_id,
+                event_ids,
+            )
+        except ValueError as exc:
+            raise PersonaUpdateError(str(exc)) from exc
+        resolved_by_id = {item["id"]: item for item in resolved}
+        return [
+            {
+                **item,
+                "project_id": resolved_by_id[item["event_id"]]["project_id"],
+                "sequence": resolved_by_id[item["event_id"]]["sequence"],
+                "created_at": resolved_by_id[item["event_id"]]["created_at"],
+            }
+            for item in evidence_items
+        ]
+
+    @staticmethod
+    def _candidate_fingerprint(agent_id: str, changes: list[dict]) -> str:
+        canonical = json.dumps(
+            {"agent_id": agent_id, "changes": changes},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _required_evidence_count(cls, persona: dict, path: str) -> int:
+        policy = persona.get("update_policy", {})
+        if path.startswith("relationship_memory"):
+            return max(
+                1,
+                int(
+                    policy.get(
+                        "minimum_supporting_events_for_relationship_change",
+                        DEFAULT_RELATIONSHIP_EVIDENCE_EVENTS,
+                    )
+                ),
+            )
+        if path.startswith("attractors."):
+            return max(
+                1,
+                int(policy.get("minimum_supporting_events_for_attractor_change", 5)),
+            )
+        return 1
+
+    def _save_dormant_candidate(
+        self,
+        *,
+        agent_id: str,
+        reason: str,
+        evidence: list[dict],
+        changes: list[dict],
+        current: dict,
+        operation_timestamp: str,
+    ) -> Path:
+        fingerprint = self._candidate_fingerprint(agent_id, changes)
+        candidate_path: Path | None = None
+        candidate: dict | None = None
+        proposed_paths = {change["path"] for change in changes}
+
+        for path in sorted(self.settings.proposals_root.glob("*.json")):
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if (
+                existing.get("agent_id") != agent_id
+                or existing.get("status") not in ACTIVE_CANDIDATE_STATUSES
+            ):
+                continue
+            if existing.get("fingerprint") == fingerprint:
+                candidate_path = path
+                candidate = existing
+                continue
+            existing_paths = {
+                change.get("path")
+                for change in existing.get("changes", [])
+                if isinstance(change, dict)
+            }
+            if proposed_paths & existing_paths:
+                existing["status"] = "superseded"
+                existing["superseded_at"] = operation_timestamp
+                existing["superseded_by"] = fingerprint
+                atomic_write_text(
+                    path,
+                    json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
+                )
+                path.chmod(0o600)
+
+        combined_evidence: dict[str, dict] = {}
+        if candidate is not None:
+            for item in candidate.get("evidence", []):
+                if isinstance(item, dict) and item.get("event_id"):
+                    combined_evidence[item["event_id"]] = item
+        for item in evidence:
+            combined_evidence[item["event_id"]] = item
+        required_evidence = max(
+            self._required_evidence_count(current, change["path"])
+            for change in changes
+        )
+        verified_count = len(combined_evidence)
+
+        if candidate is None:
+            candidate_path = (
+                self.settings.proposals_root
+                / f"{operation_timestamp}_{agent_id}.json"
+            )
+            candidate = {
+                "timestamp": operation_timestamp,
+                "first_observed_at": operation_timestamp,
+                "observation_count": 0,
+            }
+        candidate.update(
+            {
+                "status": "dormant",
+                "agent_id": agent_id,
+                "fingerprint": fingerprint,
+                "reason": reason,
+                "last_observed_at": operation_timestamp,
+                "observation_count": int(candidate.get("observation_count", 0)) + 1,
+                "evidence": list(combined_evidence.values()),
+                "changes": changes,
+                "governance": {
+                    "required_evidence_events": required_evidence,
+                    "verified_evidence_events": verified_count,
+                    "eligible_for_user_incorporation": verified_count >= required_evidence,
+                    "automatic_application": False,
+                },
+            }
+        )
+        assert candidate_path is not None
+        atomic_write_text(
+            candidate_path,
+            json.dumps(candidate, indent=2, ensure_ascii=False) + "\n",
+        )
+        candidate_path.chmod(0o600)
+        return candidate_path
+
+    def _reconcile_dormant_candidates(
+        self,
+        agent_id: str,
+        previous: dict,
+        revised: dict,
+        *,
+        resolution_actor: str,
+    ) -> None:
+        reconciliation_timestamp = timestamp_id()
+        for path in sorted(self.settings.proposals_root.glob("*.json")):
+            try:
+                candidate = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if (
+                candidate.get("agent_id") != agent_id
+                or candidate.get("status") not in ACTIVE_CANDIDATE_STATUSES
+            ):
+                continue
+            changes = [
+                change
+                for change in candidate.get("changes", [])
+                if isinstance(change, dict) and change.get("path")
+            ]
+            if not changes:
+                continue
+            incorporated = all(
+                self._change_is_present(revised, change)
+                for change in changes
+            )
+            touched = any(
+                self._get_path(previous, change["path"])[0]
+                != self._get_path(revised, change["path"])[0]
+                for change in changes
+            )
+            if not incorporated and not touched:
+                continue
+            candidate["status"] = (
+                "incorporated"
+                if incorporated
+                else f"superseded_by_{resolution_actor}"
+            )
+            candidate["resolved_at"] = reconciliation_timestamp
+            candidate["resolved_by"] = resolution_actor
+            atomic_write_text(
+                path,
+                json.dumps(candidate, indent=2, ensure_ascii=False) + "\n",
+            )
+            path.chmod(0o600)
+
+    @classmethod
+    def _change_is_present(cls, persona: dict, change: dict) -> bool:
+        existing, found = cls._get_path(persona, change["path"])
+        if not found:
+            return False
+        if change.get("operation") == "append":
+            return isinstance(existing, list) and change.get("value") in existing
+        return existing == change.get("value")
 
     def clear_project_position(self, project_id: str) -> list[str]:
         """Remove a deleted project's structured pointer from active personas."""

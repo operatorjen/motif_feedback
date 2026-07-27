@@ -75,10 +75,16 @@ microVM when code may be hostile or stronger isolation is required.
 ### Personas, persistence, and deletion
 
 - Agent persona updates pass through a validated server path. An agent cannot update another
-  persona or its own user-owned `core_motif`. Some peripheral changes are committed within
-  bounded fields; protected identity changes become proposals for user review.
+  persona or its own user-owned `core_motif`. Every cited evidence ID must resolve to that
+  agent's project-local memory or to a provenance-carried return from another project.
+- Fast-changing peripheral state may commit within bounded fields. Relationship memory requires
+  repeated verified returns. Structural changes remain dormant records: repetition accumulates
+  evidence, conflicting records supersede older ones, and only a matching manual persona edit
+  incorporates one into active identity. No agent consensus or voting process applies changes.
 - Detailed memory remains project-local. Compact, provenance-labeled continuity summaries from
-  successful turns may be supplied to the same agent in another project.
+  successful turns may be supplied to the same agent in another project. Raw beat records remain
+  available for inspection; prompt preparation groups beats from one agent turn and favors
+  relevant records without repeating exchanges already present in the room transcript.
 - The interface asks for confirmation before deleting a file or project, but confirmation is a
   browser safeguard rather than a separate server authorization step. Deletion requests still
   require the session token.
@@ -96,6 +102,8 @@ microVM when code may be hostile or stronger isolation is required.
   content used in the turn. Custom and local-network endpoints receive the same material.
 - Provider responses and tool-call loops are bounded. Provider requests ignore proxy variables,
   and stored public tool-event metadata omits generated file, source, YAML, and Markdown bodies.
+- When a streaming browser response closes before a room turn completes, the unfinished
+  provider task is canceled and awaited so it does not continue as detached background work.
 
 ## What this does not protect against
 

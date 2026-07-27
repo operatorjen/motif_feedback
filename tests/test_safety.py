@@ -17,7 +17,7 @@ from app.storage import Storage
 def make_services(tmp_path: Path):
     settings = Settings(WORKSPACE_ROOT=tmp_path)
     storage = Storage(settings.database_path, settings.projects_root)
-    personas = PersonaStore(settings)
+    personas = PersonaStore(settings, storage)
     personas.initialize()
     storage.initialize()
     tools = ProjectFileTools(storage, max_write_bytes=15000, max_upload_bytes=25000)
@@ -588,6 +588,34 @@ def test_cross_project_memory_is_compact_provisional_and_source_labeled(tmp_path
     )["event_count"] == 0
 
 
+def test_global_memory_rejects_mismatched_source_provenance(tmp_path: Path):
+    _, storage, _, _ = make_services(tmp_path)
+    source = storage.create_project("Source")
+    other = storage.create_project("Other")
+    event = storage.add_memory_event(
+        source["id"],
+        "agent_a",
+        "user-1",
+        outcome="response",
+        trigger_text="trigger",
+        return_text="return",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
+
+    with pytest.raises(ValueError, match="provenance"):
+        storage.add_global_memory_event(
+            agent_id="agent_b",
+            source_project_id=other["id"],
+            source_project_name="Invented",
+            source_memory_event_id=event["id"],
+            trigger_text=event["trigger_text"],
+            return_text=event["return_text"],
+            actions=[],
+        )
+
+
 def test_agent_cannot_edit_another_persona(tmp_path: Path):
     _, _, personas, _ = make_services(tmp_path)
     with pytest.raises(PersonaUpdateError):
@@ -629,12 +657,30 @@ def test_agent_cannot_edit_core_motif(tmp_path: Path):
 
 
 def test_agent_can_update_motif_expression(tmp_path: Path):
-    _, _, personas, _ = make_services(tmp_path)
+    _, storage, personas, _ = make_services(tmp_path)
+    project = storage.create_project("Persona evidence")
+    user_message = storage.add_message(project["id"], "user", "Clarify observer position.")
+    evidence = storage.add_memory_event(
+        project["id"],
+        "agent_a",
+        user_message["id"],
+        outcome="response",
+        trigger_text=user_message["content"],
+        return_text="I will name the observer position before generalizing.",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
     result = personas.submit_update(
         {
             "agent_id": "agent_a",
             "reason": "durable return signal",
-            "evidence": [{"event_id": "e1", "summary": "The user clarified observer position."}],
+            "evidence": [
+                {
+                    "event_id": evidence["id"],
+                    "summary": "The user clarified observer position.",
+                }
+            ],
             "changes": [
                 {
                     "path": "motif_expression.retained_adaptations",
@@ -642,11 +688,262 @@ def test_agent_can_update_motif_expression(tmp_path: Path):
                     "value": "Name the observer position before generalizing.",
                 }
             ],
-        }
+        },
+        project_id=project["id"],
     )
     assert result["committed_change_count"] == 1
     persona = personas.load_persona("agent_a")
     assert "Name the observer position" in persona["motif_expression"]["retained_adaptations"][0]
+
+
+def test_persona_update_rejects_unstored_or_wrong_agent_evidence(tmp_path: Path):
+    _, storage, personas, _ = make_services(tmp_path)
+    project = storage.create_project("Evidence boundaries")
+    user_message = storage.add_message(project["id"], "user", "A signal.")
+    other_agent_event = storage.add_memory_event(
+        project["id"],
+        "agent_b",
+        user_message["id"],
+        outcome="response",
+        trigger_text=user_message["content"],
+        return_text="Agent B return.",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
+    update = {
+        "agent_id": "agent_a",
+        "reason": "unsupported identity claim",
+        "evidence": [{"event_id": "not-stored", "summary": "Invented evidence."}],
+        "changes": [
+            {
+                "path": "motif_expression.retained_adaptations",
+                "operation": "append",
+                "value": "Unsupported adaptation.",
+            }
+        ],
+    }
+    with pytest.raises(PersonaUpdateError, match="visible memory"):
+        personas.submit_update(update, project_id=project["id"])
+
+    update["evidence"] = [
+        {
+            "event_id": other_agent_event["id"],
+            "summary": "Evidence from another agent.",
+        }
+    ]
+    with pytest.raises(PersonaUpdateError, match="visible memory"):
+        personas.submit_update(update, project_id=project["id"])
+
+
+def test_cross_project_evidence_requires_a_global_continuity_record(tmp_path: Path):
+    _, storage, personas, _ = make_services(tmp_path)
+    source = storage.create_project("Source project")
+    target = storage.create_project("Target project")
+    user_message = storage.add_message(source["id"], "user", "A durable signal.")
+    source_event = storage.add_memory_event(
+        source["id"],
+        "agent_a",
+        user_message["id"],
+        outcome="response",
+        trigger_text=user_message["content"],
+        return_text="A source-project return.",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
+    update = {
+        "agent_id": "agent_a",
+        "reason": "Cross-project continuity.",
+        "evidence": [
+            {
+                "event_id": source_event["id"],
+                "summary": "A source-project signal remained relevant.",
+            }
+        ],
+        "changes": [
+            {
+                "path": "motif_expression.retained_adaptations",
+                "operation": "append",
+                "value": "Carry only provenance-labeled cross-project signals.",
+            }
+        ],
+    }
+
+    with pytest.raises(PersonaUpdateError, match="visible memory"):
+        personas.submit_update(update, project_id=target["id"])
+
+    storage.add_global_memory_event(
+        agent_id="agent_a",
+        source_project_id=source["id"],
+        source_project_name=source["name"],
+        source_memory_event_id=source_event["id"],
+        trigger_text=source_event["trigger_text"],
+        return_text=source_event["return_text"],
+        actions=[],
+    )
+    result = personas.submit_update(update, project_id=target["id"])
+
+    assert result["committed_change_count"] == 1
+
+
+def test_relationship_memory_waits_for_repeated_evidence_and_candidates_accumulate(
+    tmp_path: Path,
+):
+    _, storage, personas, _ = make_services(tmp_path)
+    project = storage.create_project("Slow relationship memory")
+    evidence_events = []
+    for index in range(2):
+        user_message = storage.add_message(
+            project["id"],
+            "user",
+            f"Relationship signal {index + 1}.",
+        )
+        evidence_events.append(
+            storage.add_memory_event(
+                project["id"],
+                "agent_a",
+                user_message["id"],
+                outcome="response",
+                trigger_text=user_message["content"],
+                return_text=f"Observed relationship signal {index + 1}.",
+                actions=[],
+                provider="gemini",
+                model="gemini-test",
+            )
+        )
+    change = {
+        "path": "relationship_memory.user.observations",
+        "operation": "append",
+        "value": "The user prefers explicit uncertainty.",
+    }
+
+    for evidence in evidence_events:
+        result = personas.submit_update(
+            {
+                "agent_id": "agent_a",
+                "reason": "A possible recurring preference.",
+                "evidence": [
+                    {
+                        "event_id": evidence["id"],
+                        "summary": "The user requested explicit uncertainty.",
+                    }
+                ],
+                "changes": [change],
+            },
+            project_id=project["id"],
+        )
+        assert result["committed_change_count"] == 0
+        assert result["proposal_change_count"] == 1
+
+    candidates = personas.list_proposals()
+    assert len(candidates) == 1
+    assert candidates[0]["status"] == "dormant"
+    assert candidates[0]["observation_count"] == 2
+    assert candidates[0]["governance"] == {
+        "required_evidence_events": 2,
+        "verified_evidence_events": 2,
+        "eligible_for_user_incorporation": True,
+        "automatic_application": False,
+    }
+    assert personas.load_persona("agent_a")[
+        "relationship_memory"
+    ]["user"]["observations"] == []
+
+    committed = personas.submit_update(
+        {
+            "agent_id": "agent_a",
+            "reason": "Repeated evidence now supports the relationship memory.",
+            "evidence": [
+                {
+                    "event_id": event["id"],
+                    "summary": "Repeated explicit uncertainty preference.",
+                }
+                for event in evidence_events
+            ],
+            "changes": [change],
+        },
+        project_id=project["id"],
+    )
+    assert committed["committed_change_count"] == 1
+    assert personas.list_proposals() == []
+    assert personas.load_persona("agent_a")[
+        "relationship_memory"
+    ]["user"]["observations"] == [change["value"]]
+
+
+def test_manual_persona_edit_incorporates_a_dormant_structural_candidate(
+    tmp_path: Path,
+):
+    _, storage, personas, _ = make_services(tmp_path)
+    project = storage.create_project("Dormant structural candidate")
+    user_message = storage.add_message(project["id"], "user", "A structural signal.")
+    evidence = storage.add_memory_event(
+        project["id"],
+        "agent_a",
+        user_message["id"],
+        outcome="response",
+        trigger_text=user_message["content"],
+        return_text="A possible systems-style refinement.",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
+    )
+    new_orientation = "situated_observation_with_explicit_uncertainty"
+    base_update = {
+        "agent_id": "agent_a",
+        "reason": "Possible structural refinement.",
+        "evidence": [
+            {
+                "event_id": evidence["id"],
+                "summary": "The user emphasized explicit uncertainty.",
+            }
+        ],
+        "changes": [
+            {
+                "path": "systems_style.orientation",
+                "operation": "replace",
+                "value": "first_provisional_orientation",
+            }
+        ],
+    }
+    first_result = personas.submit_update(
+        base_update,
+        project_id=project["id"],
+    )
+    first_path = (
+        personas.settings.proposals_root / first_result["proposal_path"]
+    )
+    revised_update = {
+        **base_update,
+        "changes": [
+            {
+                "path": "systems_style.orientation",
+                "operation": "replace",
+                "value": new_orientation,
+            }
+        ],
+    }
+    result = personas.submit_update(
+        revised_update,
+        project_id=project["id"],
+    )
+    candidate_path = personas.settings.proposals_root / result["proposal_path"]
+    superseded = json.loads(first_path.read_text(encoding="utf-8"))
+    assert superseded["status"] == "superseded"
+    assert personas.list_proposals()[0]["status"] == "dormant"
+
+    persona = personas.load_persona("agent_a")
+    persona["systems_style"]["orientation"] = new_orientation
+    personas.save_user_edit(
+        "agent_a",
+        yaml.safe_dump(persona, sort_keys=False, allow_unicode=True),
+    )
+
+    assert personas.list_proposals() == []
+    resolved = json.loads(candidate_path.read_text(encoding="utf-8"))
+    assert resolved["status"] == "incorporated"
+    assert resolved["resolved_by"] == "user_edit"
 
 
 def test_agent_persona_update_requires_evidence(tmp_path: Path):
@@ -669,18 +966,17 @@ def test_agent_persona_update_requires_evidence(tmp_path: Path):
         )
 
 
-def test_reflection_contract_uses_the_shared_seed_layout(tmp_path: Path):
+def test_unused_reflection_and_unit_contracts_are_not_installed(tmp_path: Path):
     settings, _, personas, _ = make_services(tmp_path)
 
-    assert (settings.seed_root / "shared" / "reflection_prompt.md").is_file()
-    assert not (settings.seed_root / "reflection_prompt.md").exists()
-    assert "Contract version: 5" in personas.load_reflection_contract()
-    assert "Every change must cite one or more event IDs." in (
-        personas.load_reflection_contract()
-    )
+    assert not (settings.seed_root / "shared" / "reflection_prompt.md").exists()
+    assert not (settings.seed_root / "shared" / "unit.yaml").exists()
+    assert not (settings.shared_root / "reflection_prompt.md").exists()
+    assert not (settings.shared_root / "unit.yaml").exists()
+    assert personas.load_shared_context()
 
 
-def test_outdated_reflection_contract_is_snapshotted_and_migrated(tmp_path: Path):
+def test_legacy_reflection_contract_is_left_untouched_but_not_loaded(tmp_path: Path):
     settings = Settings(WORKSPACE_ROOT=tmp_path)
     settings.shared_root.mkdir(parents=True, exist_ok=True)
     old_contract = "# Old reflection contract\n\n**Contract version: 4**\n"
@@ -692,12 +988,10 @@ def test_outdated_reflection_contract_is_snapshotted_and_migrated(tmp_path: Path
     personas = PersonaStore(settings)
     personas.initialize()
 
-    assert "Contract version: 5" in personas.load_reflection_contract()
-    snapshots = list(
-        (settings.history_root / "migrations").glob("*_reflection_prompt.md")
-    )
-    assert len(snapshots) == 1
-    assert snapshots[0].read_text(encoding="utf-8") == old_contract
+    assert (
+        settings.shared_root / "reflection_prompt.md"
+    ).read_text(encoding="utf-8") == old_contract
+    assert not hasattr(personas, "load_reflection_contract")
 
 
 def test_agent_persona_update_rejects_incompatible_field_shape(tmp_path: Path):

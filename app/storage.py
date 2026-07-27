@@ -129,6 +129,9 @@ class Storage:
                 CREATE INDEX IF NOT EXISTS idx_memory_project_agent_sequence
                 ON agent_memory_events(project_id, agent_id, sequence DESC);
 
+                CREATE INDEX IF NOT EXISTS idx_memory_project_agent_user_message
+                ON agent_memory_events(project_id, agent_id, user_message_id);
+
                 CREATE TABLE IF NOT EXISTS agent_global_memory_events (
                     id TEXT PRIMARY KEY,
                     agent_id TEXT NOT NULL,
@@ -614,6 +617,9 @@ class Storage:
         agent_id: str,
         limit: int = DEFAULT_MEMORY_EVENT_LIMIT,
     ) -> list[dict]:
+        if limit <= 0:
+            self.get_project(project_id)
+            return []
         safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)
         with self.connection() as connection:
             self._project_from_connection(connection, project_id)
@@ -628,6 +634,53 @@ class Storage:
                 (project_id, agent_id, safe_limit),
             ).fetchall()
         return [self._row_with_actions(row) for row in rows]
+
+    def validate_agent_memory_evidence(
+        self,
+        project_id: str,
+        agent_id: str,
+        event_ids: list[str],
+    ) -> list[dict]:
+        """Resolve evidence visible to an agent in this project.
+
+        Current-project events are visible directly. Successful events from another
+        project are visible only when a provenance-labeled global continuity record
+        exists for the same source event.
+        """
+        self.get_project(project_id)
+        unique_ids = list(dict.fromkeys(str(event_id).strip() for event_id in event_ids))
+        if not unique_ids or any(not event_id for event_id in unique_ids):
+            raise StorageError("Persona-update evidence must reference stored memory events.")
+        placeholders = ", ".join("?" for _ in unique_ids)
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT memory.id, memory.project_id, memory.agent_id,
+                       memory.user_message_id, memory.sequence, memory.outcome,
+                       memory.created_at
+                FROM agent_memory_events AS memory
+                WHERE memory.agent_id = ?
+                  AND memory.id IN ({placeholders})
+                  AND (
+                    memory.project_id = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM agent_global_memory_events AS global_memory
+                        WHERE global_memory.source_memory_event_id = memory.id
+                          AND global_memory.agent_id = memory.agent_id
+                          AND global_memory.source_project_id != ?
+                    )
+                  )
+                """,
+                [agent_id, *unique_ids, project_id, project_id],
+            ).fetchall()
+        by_id = {row["id"]: dict(row) for row in rows}
+        missing = [event_id for event_id in unique_ids if event_id not in by_id]
+        if missing:
+            raise StorageError(
+                "Persona-update evidence was not found in this agent's visible memory."
+            )
+        return [by_id[event_id] for event_id in unique_ids]
 
     def add_global_memory_event(
         self,
@@ -644,6 +697,24 @@ class Storage:
         """Store one compact, provenance-labeled return for cross-project continuity."""
         timestamp = created_at or utc_now()
         with self._write_lock, self.connection() as connection:
+            source = connection.execute(
+                """
+                SELECT memory.agent_id, memory.project_id, projects.name AS project_name
+                FROM agent_memory_events AS memory
+                JOIN projects ON projects.id = memory.project_id
+                WHERE memory.id = ?
+                """,
+                (source_memory_event_id,),
+            ).fetchone()
+            if (
+                source is None
+                or source["agent_id"] != agent_id
+                or source["project_id"] != source_project_id
+            ):
+                raise StorageError(
+                    "Global continuity provenance does not match its source memory event."
+                )
+            source_project_name = source["project_name"]
             existing = connection.execute(
                 """
                 SELECT id, agent_id, source_project_id, source_project_name,
@@ -715,6 +786,8 @@ class Storage:
         exclude_project_id: str | None = None,
         limit: int = DEFAULT_MEMORY_EVENT_LIMIT,
     ) -> list[dict]:
+        if limit <= 0:
+            return []
         safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)
         where = "agent_id = ?"
         values: list[object] = [agent_id]
@@ -731,6 +804,43 @@ class Storage:
                 FROM agent_global_memory_events
                 WHERE {where}
                 ORDER BY sequence DESC LIMIT ?
+                """,
+                values,
+            ).fetchall()
+        return [self._row_with_actions(row) for row in rows]
+
+    def list_global_memory_context_events(
+        self,
+        agent_id: str,
+        *,
+        exclude_project_id: str | None = None,
+        limit: int = DEFAULT_MEMORY_EVENT_LIMIT,
+    ) -> list[dict]:
+        """Return internal prompt records with source-turn grouping metadata."""
+        if limit <= 0:
+            return []
+        safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)
+        where = "global_memory.agent_id = ?"
+        values: list[object] = [agent_id]
+        if exclude_project_id is not None:
+            where += " AND global_memory.source_project_id != ?"
+            values.append(exclude_project_id)
+        values.append(safe_limit)
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT global_memory.id, global_memory.agent_id,
+                       global_memory.source_project_id,
+                       global_memory.source_project_name,
+                       global_memory.source_memory_event_id,
+                       global_memory.sequence, global_memory.trigger_summary,
+                       global_memory.return_summary, global_memory.actions_json,
+                       global_memory.created_at, source.user_message_id
+                FROM agent_global_memory_events AS global_memory
+                JOIN agent_memory_events AS source
+                  ON source.id = global_memory.source_memory_event_id
+                WHERE {where}
+                ORDER BY global_memory.sequence DESC LIMIT ?
                 """,
                 values,
             ).fetchall()

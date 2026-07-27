@@ -2,13 +2,17 @@
 
 ![⟁](https://aesxarg.net/taste-as-system-sm.jpg)
 
-Motif Feedback is a local-first, single-user application for talking with three persistent
-agents in one conversational room. It is designed for long-running work that benefits from
-distinct perspectives, project continuity, and reflection over time.
+Motif Feedback is a local-first, single-user application for user-guided conversations with
+three persistent agent personas in one conversational room. It is designed for long-running
+thematic work that benefits from distinct perspectives, continuity across returns, and
+revisiting ideas over time.
 
 Each agent has an editable persona, a protected core motif, and separately configurable access
 to a hosted or local OpenAI-compatible model. Conversations, continuity records, sources, and
 project files persist under `workspace/`.
+
+The agents respond only to user-initiated turns; the application does not schedule background
+work or allow them to operate independently.
 
 This is a personal experimental system for localhost. It is not a production multi-user
 service.
@@ -28,9 +32,17 @@ change position. Their core motifs remain user-owned and agent-locked, while per
 such as current position, motif expression, relationship memory, and self-model may adapt
 through feedback.
 
-Structural persona changes become proposals for user review. Accepted changes are validated,
-snapshotted, and recorded with provenance. This creates continuity without treating the agents
-as conscious, embodied, or independently self-producing.
+Identity changes are governed by policy rather than agent consensus. Bounded peripheral state
+may adapt automatically through recorded feedback, while structural changes remain inactive
+continuity records unless the user deliberately incorporates them. Changes are bounded,
+attributable, and recoverable without requiring the agents—or the user—to vote on them. This
+creates continuity without treating the agents as conscious, embodied, or independently
+self-producing.
+
+Agent-authored identity changes must cite stored returns belonging to that agent. Fast-changing
+state may update from one verified return, while relationship memory requires repeated evidence.
+Repeated structural suggestions accumulate into one dormant record; conflicting suggestions
+supersede older records, and a matching manual persona edit records deliberate incorporation.
 
 Selected agents speak sequentially, so later agents can respond to earlier returns in the same
 round. Direct address, research routing, or rotation determines who speaks first.
@@ -101,8 +113,11 @@ that request.
 ## Projects and tools
 
 Each project keeps its own conversation, files, supplied-page snapshots, and detailed agent
-continuity records. Compact, provenance-labelled returns may be shown to the same agent in
-another project as provisional context.
+continuity records. Raw response-beat records remain visible in the inspector, while prompt
+context groups beats from one agent turn, favors relevant returns, and uses compact event
+references where the room transcript already contains the same exchange. Compact,
+provenance-labelled returns may be shown to the same agent in another project as provisional
+context.
 
 Agents can list, read, search, create, and revise permitted project files. Their file tools are
 confined to the current project folder:
@@ -133,10 +148,10 @@ workspace/
 ```
 
 This includes the SQLite database, runtime configuration, provider catalog, personas, shared
-context, persona history and proposals, projects, files, and supplied-page snapshots. Seeded
-personas, shared context, and the provider catalog are copied from `app/seed/` on first startup.
-The runtime configuration is created only after you save provider and model selections in
-**SETUP**. Afterward, all workspace state is persistent.
+context, persona history and dormant identity-change records, projects, files, and supplied-page
+snapshots. Seeded personas, shared context, and the provider catalog are copied from `app/seed/`
+on first startup. The runtime configuration is created only after you save provider and model
+selections in **SETUP**. Afterward, all workspace state is persistent.
 
 Back up `workspace/` to preserve the complete local state. Keep `.env` separate because it may
 contain provider secrets.

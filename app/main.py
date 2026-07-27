@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .agent_tools import AgentToolExecutor
+from .async_tasks import cancel_and_wait
 from .code_runner import CodeRunnerClient, CodeRunnerError
 from .config import RuntimeNotConfiguredError, get_settings
 from .constants import (
@@ -61,7 +62,7 @@ provider_catalog_store = ProviderCatalogStore(
     settings.seed_root / "providers.yaml",
 )
 provider_registry = ProviderRegistry(settings, provider_catalog_store)
-persona_store = PersonaStore(settings)
+persona_store = PersonaStore(settings, storage)
 file_tools = ProjectFileTools(
     storage,
     max_write_bytes=settings.agent_file_byte_limit,
@@ -340,7 +341,7 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
                     break
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         finally:
-            await task
+            await cancel_and_wait(task)
 
     return StreamingResponse(
         event_stream(),

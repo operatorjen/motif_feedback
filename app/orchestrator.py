@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,28 @@ class RoomResponse:
 
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+MEMORY_RELEVANCE_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "could",
+    "from",
+    "have",
+    "into",
+    "more",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "through",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+}
 
 
 class Orchestrator:
@@ -158,22 +181,45 @@ class Orchestrator:
             progress_callback,
             {"type": "agent_start", "agent_id": agent_id, "display_name": display_name},
         )
+        local_limit = self.settings.local_memory_context_events
+        global_limit = self.settings.global_memory_context_events
+        memory_history = self._select_memory_history(
+            self._consolidate_memory_turns(
+                self.storage.list_memory_events(
+                    request.project_id,
+                    agent_id,
+                    limit=min(200, max(local_limit, local_limit * 4)),
+                )
+            ),
+            query=request.message,
+            limit=local_limit,
+            recent=recent,
+            agent_id=agent_id,
+        )
+        global_context_reader = getattr(
+            self.storage,
+            "list_global_memory_context_events",
+            self.storage.list_global_memory_events,
+        )
+        global_memory_history = self._select_memory_history(
+            self._consolidate_memory_turns(
+                global_context_reader(
+                    agent_id,
+                    exclude_project_id=request.project_id,
+                    limit=min(200, max(global_limit, global_limit * 4)),
+                )
+            ),
+            query=request.message,
+            limit=global_limit,
+        )
         system_prompt = self._build_system_prompt(
             persona=persona,
             project=project,
             shared_context=shared_context,
             is_first=not visible_responses,
             memory_loop=memory_loop_for(agent_id),
-            memory_history=self.storage.list_memory_events(
-                request.project_id,
-                agent_id,
-                limit=self.settings.local_memory_context_events,
-            ),
-            global_memory_history=self.storage.list_global_memory_events(
-                agent_id,
-                exclude_project_id=request.project_id,
-                limit=self.settings.global_memory_context_events,
-            ),
+            memory_history=memory_history,
+            global_memory_history=global_memory_history,
             web_sources=web_sources,
             research_decision=decision,
             role_signals=role_signals,
@@ -633,11 +679,144 @@ class Orchestrator:
                 source_project_id=request.project_id,
                 source_project_name=project["name"],
                 source_memory_event_id=local_event["id"],
-                trigger_text=request.message,
-                return_text=return_text,
-                actions=actions,
+                trigger_text=local_event["trigger_text"],
+                return_text=local_event["return_text"],
+                actions=local_event["actions"],
                 created_at=local_event["created_at"],
             )
+
+    @classmethod
+    def _select_memory_history(
+        cls,
+        events: list[dict],
+        *,
+        query: str,
+        limit: int,
+        recent: list[dict] | None = None,
+        agent_id: str | None = None,
+    ) -> list[dict]:
+        if limit <= 0:
+            return []
+        covered_user_messages: set[str] = set()
+        if recent is not None and agent_id is not None:
+            for message in recent:
+                if message.get("role") != "agent" or message.get("agent_id") != agent_id:
+                    continue
+                metadata = message.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("user_message_id"):
+                    covered_user_messages.add(str(metadata["user_message_id"]))
+        candidates: list[dict] = []
+        for event in events:
+            candidate = dict(event)
+            if str(event.get("user_message_id", "")) in covered_user_messages:
+                candidate["_transcript_covered"] = True
+            candidates.append(candidate)
+        query_terms = cls._memory_terms(query)
+
+        def rank(event: dict) -> tuple[int, int]:
+            event_text = " ".join(
+                str(event.get(key, ""))
+                for key in (
+                    "trigger_text",
+                    "return_text",
+                    "trigger_summary",
+                    "return_summary",
+                    "source_project_name",
+                )
+            )
+            overlap = len(query_terms & cls._memory_terms(event_text))
+            return overlap, int(event.get("sequence") or 0)
+
+        return sorted(candidates, key=rank, reverse=True)[:limit]
+
+    @staticmethod
+    def _consolidate_memory_turns(events: list[dict]) -> list[dict]:
+        """Group response beats for prompt context while preserving the raw ledger."""
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        order: list[tuple[str, str]] = []
+        for event in events:
+            project_id = str(
+                event.get("project_id")
+                or event.get("source_project_id")
+                or ""
+            )
+            user_message_id = str(event.get("user_message_id") or event.get("id") or "")
+            key = project_id, user_message_id
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            grouped[key].append(event)
+
+        consolidated: list[dict] = []
+        for key in order:
+            beats = sorted(
+                grouped[key],
+                key=lambda event: int(event.get("sequence") or 0),
+            )
+            combined = dict(beats[-1])
+            combined["actions"] = Orchestrator._merge_memory_actions(beats)
+            combined["outcome"] = "+".join(
+                dict.fromkeys(str(beat.get("outcome", "")) for beat in beats)
+            ).strip("+")
+            combined["trigger_text"] = next(
+                (
+                    str(beat.get("trigger_text", ""))
+                    for beat in beats
+                    if beat.get("trigger_text")
+                ),
+                "",
+            )
+            combined["return_text"] = "\n\n".join(
+                str(beat.get("return_text", "")).strip()
+                for beat in beats
+                if str(beat.get("return_text", "")).strip()
+            )
+            combined["trigger_summary"] = next(
+                (
+                    str(beat.get("trigger_summary", ""))
+                    for beat in beats
+                    if beat.get("trigger_summary")
+                ),
+                "",
+            )
+            combined["return_summary"] = " ".join(
+                str(beat.get("return_summary", "")).strip()
+                for beat in beats
+                if str(beat.get("return_summary", "")).strip()
+            )
+            combined["_evidence_event_ids"] = [
+                str(beat["id"]) for beat in beats if beat.get("id")
+            ]
+            combined["_source_memory_event_ids"] = [
+                str(beat["source_memory_event_id"])
+                for beat in beats
+                if beat.get("source_memory_event_id")
+            ]
+            consolidated.append(combined)
+        return consolidated
+
+    @staticmethod
+    def _merge_memory_actions(events: list[dict]) -> list[dict]:
+        actions: list[dict] = []
+        seen: set[str] = set()
+        for event in events:
+            for action in event.get("actions", []):
+                if not isinstance(action, dict):
+                    continue
+                key = repr(sorted(action.items()))
+                if key in seen:
+                    continue
+                seen.add(key)
+                actions.append(action)
+        return actions
+
+    @staticmethod
+    def _memory_terms(text: str) -> set[str]:
+        return {
+            term
+            for term in re.findall(r"[a-z0-9_]{4,}", str(text).lower())
+            if term not in MEMORY_RELEVANCE_STOPWORDS
+        }
 
     @staticmethod
     def _format_transcript(messages: list[dict], user_display_name: str = "User") -> str:
@@ -742,8 +921,10 @@ IDENTITY CONTRACT
 - Continuity is stored identity maintenance, not consciousness, embodiment, biological
   self-production, private feeling, or independent life.
 - Use propose_persona_update rarely, after a meaningful return signal. Prefer no update over
-  a weak update, cite relevant event IDs, update only yourself, and stay within the compact
-  update scope included in your runtime persona.
+  a weak update, cite only relevant event IDs shown in your continuity context, update only
+  yourself, and stay within the compact update scope included in your runtime persona. Never
+  invent an evidence ID. Slow fields require multiple distinct stored events; insufficiently
+  supported changes remain dormant and do not alter your active persona.
 
 CURRENT PROJECT
 {yaml.safe_dump(project, sort_keys=False, allow_unicode=True)}
@@ -892,6 +1073,14 @@ TURN CONTRACT
                 "may_commit": update_policy.get("may_commit"),
                 "may_only_propose": update_policy.get("may_only_propose"),
                 "never_agent_editable": update_policy.get("never_agent_editable"),
+                "minimum_supporting_events_for_relationship_change": update_policy.get(
+                    "minimum_supporting_events_for_relationship_change",
+                    2,
+                ),
+                "minimum_supporting_events_for_attractor_change": update_policy.get(
+                    "minimum_supporting_events_for_attractor_change",
+                    5,
+                ),
             },
         }
         if include_research:
@@ -922,6 +1111,14 @@ TURN CONTRACT
             return "[No prior returns in this project yet.]"
         lines = []
         for event in events:
+            event_ids = event.get("_evidence_event_ids") or [event.get("id")]
+            event_label = ", ".join(str(event_id) for event_id in event_ids if event_id)
+            if event.get("_transcript_covered"):
+                lines.append(
+                    f"- event(s) {event_label}; cycle {event.get('sequence')}: "
+                    "the trigger and return are already represented in the room transcript."
+                )
+                continue
             actions = ", ".join(
                 f"{action.get('tool')}{f'({action.get('path')})' if action.get('path') else ''}"
                 for action in event.get("actions", [])
@@ -934,7 +1131,8 @@ TURN CONTRACT
                 :MEMORY_PROMPT_RETURN_MAX_CHARS
             ]
             lines.append(
-                f"- cycle {event.get('sequence')}: outcome={event.get('outcome')}; "
+                f"- event(s) {event_label}; cycle {event.get('sequence')}: "
+                f"outcome={event.get('outcome')}; "
                 f"actions={actions}\n  trigger: {trigger}\n  return: {returned}"
             )
         return "\n".join(lines)
@@ -945,13 +1143,20 @@ TURN CONTRACT
             return "[No returns from other projects are available yet.]"
         lines = []
         for event in events:
+            source_event_ids = event.get("_source_memory_event_ids") or [
+                event.get("source_memory_event_id")
+            ]
+            source_event_label = ", ".join(
+                str(event_id) for event_id in source_event_ids if event_id
+            )
             actions = ", ".join(
                 f"{action.get('tool')}{f'({action.get('path')})' if action.get('path') else ''}"
                 for action in event.get("actions", [])
                 if action.get("ok")
             ) or "none"
             lines.append(
-                f"- continuity {event.get('sequence')} from project "
+                f"- source event(s) {source_event_label}; "
+                f"continuity {event.get('sequence')} from project "
                 f"{event.get('source_project_name', event.get('source_project_id'))!r}; "
                 f"actions={actions}\n  trigger summary: {event.get('trigger_summary', '')}"
                 f"\n  return summary: {event.get('return_summary', '')}"

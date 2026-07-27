@@ -117,8 +117,9 @@ USER_TOOL_DEFINITIONS = [
             "name": "propose_persona_update",
             "description": (
                 "Save a justified update to your own permitted adaptive persona fields. Some "
-                "changes commit immediately and protected peripheral changes become proposals. "
-                "Your core_motif is locked. Use rarely and only after a durable return signal."
+                "changes commit immediately under policy; slow or structural changes remain "
+                "dormant records that can accumulate verified evidence. Your core_motif is "
+                "locked. Use rarely and only after a durable return signal."
             ),
             "parameters": {
                 "type": "object",
@@ -210,7 +211,13 @@ class AgentToolExecutor:
                         "changes": arguments["changes"],
                     }
                 )
-                return {"ok": True, **self.persona_store.submit_update(payload)}
+                return {
+                    "ok": True,
+                    **self.persona_store.submit_update(
+                        payload,
+                        project_id=context.project_id,
+                    ),
+                }
             return {"ok": False, "error": "Unknown tool."}
         except FileToolError as exc:
             return {
