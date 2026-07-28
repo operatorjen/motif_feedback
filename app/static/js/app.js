@@ -1216,7 +1216,7 @@ elements.createProject.addEventListener("click", async () => {
 });
 
 elements.deleteProject.addEventListener("click", async () => {
-  if (state.busy) return;
+  if (state.busy || state.promptQueue.length) return;
   const project = state.projects.find((item) => item.id === state.currentProject);
   if (!project) return;
   const confirmed = window.confirm(
@@ -1250,26 +1250,20 @@ elements.deleteProject.addEventListener("click", async () => {
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    elements.deleteProject.disabled = state.busy || !state.currentProject;
+    elements.deleteProject.disabled = (
+      state.busy
+      || state.promptQueue.length > 0
+      || !state.currentProject
+    );
   }
 });
 
-elements.composer.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (state.busy) return;
-  const message = elements.messageInput.value.trim();
-  if (!message) return;
-  const participants = currentParticipants();
-  if (!participants.length) {
-    showToast("Select at least one agent.", true);
-    return;
-  }
-
-  setBusy(true);
+function appendOptimisticPrompt(turn) {
+  if (state.currentProject !== turn.projectId) return;
   const optimistic = {
     role: "user",
-    content: message,
-    created_at: new Date().toISOString(),
+    content: turn.message,
+    created_at: turn.queuedAt,
     annotations: [],
     metadata: {},
   };
@@ -1278,42 +1272,134 @@ elements.composer.addEventListener("submit", async (event) => {
   const optimisticViewport = captureMessagesViewport();
   elements.messages.append(renderMessage(optimistic));
   restoreMessagesViewport(optimisticViewport);
-  elements.messageInput.value = "";
+}
 
+function updateResearchIndicator(result) {
+  const research = result.research;
+  const sourceCount = result.web_sources?.length || 0;
+  elements.researchIndicator.textContent = research.evidence_status === "unavailable"
+    ? "NO WEB EVIDENCE · AGENTS SKIPPED"
+    : sourceCount
+    ? `WEB: ${sourceCount} SHARED SOURCE${sourceCount === 1 ? "" : "S"}`
+    : research.search_fallback_agent
+      ? `SEARCH FALLBACK / ${agentMeta[research.search_fallback_agent]?.name?.toUpperCase() || research.search_fallback_agent.toUpperCase()}`
+    : research.needs_search
+      ? `SEARCH DISCOVERY UNAVAILABLE${research.lead_agent ? ` / ${agentMeta[research.lead_agent].name.toUpperCase()}` : ""}`
+      : "NO SEARCH";
+}
+
+async function executeQueuedPrompt(turn) {
+  appendOptimisticPrompt(turn);
   try {
-    beginTurnProgress();
+    if (state.currentProject === turn.projectId) beginTurnProgress();
     const result = await streamApi("/api/chat/stream", {
       method: "POST",
       body: JSON.stringify({
-        project_id: state.currentProject,
-        message,
-        participants,
-        research_mode: elements.researchMode.value,
+        project_id: turn.projectId,
+        message: turn.message,
+        participants: turn.participants,
+        research_mode: turn.researchMode,
       }),
-    }, updateTurnProgress);
+    }, (event) => {
+      if (state.currentProject === turn.projectId) updateTurnProgress(event);
+    });
     if (!result) throw new Error("The server closed the response before returning a result.");
-    const research = result.research;
-    const sourceCount = result.web_sources?.length || 0;
-    elements.researchIndicator.textContent = research.evidence_status === "unavailable"
-      ? "NO WEB EVIDENCE · AGENTS SKIPPED"
-      : sourceCount
-      ? `WEB: ${sourceCount} SHARED SOURCE${sourceCount === 1 ? "" : "S"}`
-      : research.search_fallback_agent
-        ? `SEARCH FALLBACK / ${agentMeta[research.search_fallback_agent].name.toUpperCase()}`
-      : research.needs_search
-        ? `SEARCH DISCOVERY UNAVAILABLE${research.lead_agent ? ` / ${agentMeta[research.lead_agent].name.toUpperCase()}` : ""}`
-        : "NO SEARCH";
-    await Promise.all([loadMessages(), loadMemoryLoop(), loadFiles(), loadSources(), loadProposals()]);
-    renderAgentFailures(result.agent_failures || []);
-    state.progressNode = null;
+    if (state.currentProject === turn.projectId) {
+      updateResearchIndicator(result);
+      await Promise.all([
+        loadMessages(),
+        loadMemoryLoop(),
+        loadFiles(),
+        loadSources(),
+        loadProposals(),
+      ]);
+      renderAgentFailures(result.agent_failures || []);
+    } else {
+      showToast(`Queued turn completed in ${turn.projectName}.`);
+    }
   } catch (error) {
     showToast(error.message, true);
-    await loadMessages();
-    state.progressNode = null;
-    renderRequestError(error.message);
+    if (state.currentProject === turn.projectId) {
+      await loadMessages();
+      renderRequestError(error.message);
+    }
   } finally {
+    state.progressNode?.remove();
+    state.progressNode = null;
+  }
+}
+
+async function drainPromptQueue() {
+  if (state.busy) return;
+  const turn = state.promptQueue.shift();
+  if (!turn) {
     setBusy(false);
-    elements.messageInput.focus();
+    renderPromptQueue();
+    return;
+  }
+  state.activePrompt = turn;
+  setBusy(true);
+  renderPromptQueue();
+  try {
+    await executeQueuedPrompt(turn);
+  } catch (error) {
+    showToast(`Queued turn could not finish: ${error.message}`, true);
+  } finally {
+    state.activePrompt = null;
+    state.busy = false;
+    renderPromptQueue();
+    if (state.promptQueue.length) {
+      void drainPromptQueue();
+    } else {
+      setBusy(false);
+    }
+    elements.messageInput.focus({ preventScroll: true });
+  }
+}
+
+elements.composer.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = elements.messageInput.value.trim();
+  if (!message) return;
+  const participants = currentParticipants();
+  if (!participants.length) {
+    showToast("Select at least one agent.", true);
+    return;
+  }
+  const project = state.projects.find((item) => item.id === state.currentProject);
+  if (!project) {
+    showToast("Choose a project before adding a prompt.", true);
+    return;
+  }
+
+  try {
+    state.promptQueue.enqueue({
+      projectId: project.id,
+      projectName: project.name,
+      message,
+      participants,
+      researchMode: elements.researchMode.value,
+      queuedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+  elements.messageInput.value = "";
+  renderPromptQueue();
+  setBusy(state.busy);
+  if (state.busy) {
+    showToast(`Prompt queued. ${state.promptQueue.length} waiting.`);
+  }
+  void drainPromptQueue();
+});
+
+elements.promptQueue.addEventListener("click", (event) => {
+  const remove = event.target.closest("[data-queued-turn-id]");
+  if (!remove) return;
+  if (state.promptQueue.remove(remove.dataset.queuedTurnId)) {
+    renderPromptQueue();
+    setBusy(state.busy);
   }
 });
 

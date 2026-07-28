@@ -47,6 +47,12 @@ supersede older records, and a matching manual persona edit records deliberate i
 Selected agents speak sequentially, so later agents can respond to earlier returns in the same
 round. Direct address, research routing, or rotation determines who speaks first.
 
+The chat composer remains available while a room turn is running. Additional submissions enter
+a bounded, first-in-first-out browser queue and begin one at a time after the active turn
+finishes. Each queued prompt retains the project, selected participants, and research mode from
+the moment it was submitted. Waiting prompts can be removed before they start. The queue lives
+only in the current browser tab and is not persisted across a reload.
+
 ## Quick start
 
 Docker with Compose is the intended way to run the complete system.

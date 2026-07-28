@@ -116,6 +116,9 @@ microVM when code may be hostile or stronger isolation is required.
   and stored public tool-event metadata omits generated file, source, YAML, and Markdown bodies.
 - When a streaming browser response closes before a room turn completes, the unfinished
   provider task is canceled and awaited so it does not continue as detached background work.
+- Prompts submitted during an active room turn wait in a bounded in-memory browser queue. They are
+  sent to the server sequentially and are not written to browser storage. Reloading or closing the
+  tab discards prompts that have not started.
 
 ## What this does not protect against
 
