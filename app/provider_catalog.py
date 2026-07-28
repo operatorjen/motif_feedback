@@ -34,6 +34,8 @@ class ProviderProfile(BaseModel):
     supports_temperature: bool = True
     supports_tools: bool = True
     reasoning_effort: str | None = Field(default=None, max_length=40)
+    web_search_mode: Literal["none", "responses"] | None = None
+    web_search_context_size: Literal["low", "medium", "high"] = "medium"
 
     @field_validator("id")
     @classmethod
@@ -234,12 +236,21 @@ class ProviderRegistry:
                 "api_key_required": profile.api_key_required,
                 "models": profile.models,
                 "supports_tools": profile.supports_tools,
+                "web_search_mode": profile.web_search_mode,
                 "ready": statuses.get(profile.id, False),
             }
             for profile in self.profiles(enabled_only=True)
         ]
 
     def _effective_profile(self, profile: ProviderProfile) -> ProviderProfile:
+        if profile.web_search_mode is None:
+            profile = profile.model_copy(
+                update={
+                    "web_search_mode": (
+                        "responses" if profile.id == "openai" else "none"
+                    )
+                }
+            )
         if profile.id not in BUILTIN_PROVIDER_IDS:
             return profile
         if f"{profile.id.upper()}_BASE_URL" not in os.environ:

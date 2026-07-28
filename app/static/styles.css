@@ -122,6 +122,7 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
 .sources a { color: var(--ink); font-size: .76rem; overflow-wrap: anywhere; }
 .message.user .sources a { color: var(--paper); }
 .source-failures { border-top: 1px solid var(--danger); padding: 9px 12px; color: var(--danger); font-size: .7rem; overflow-wrap: anywhere; }
+.source-provenance { border-top: 1px solid var(--ink); padding: 7px 12px; color: #66645e; font-size: .65rem; font-weight: 900; letter-spacing: .08em; overflow-wrap: anywhere; }
 .tool-activity { border-top: 1px solid var(--ink); padding: 9px 12px; display: grid; gap: 6px; }
 .tool-activity-label { color: #66645e; font-size: .65rem; font-weight: 900; letter-spacing: .1em; }
 .tool-file-link { width: 100%; padding: 7px 9px; background: transparent; color: var(--ink); border: 1px solid var(--ink); text-align: left; text-transform: none; font-size: .72rem; overflow-wrap: anywhere; }
@@ -141,6 +142,16 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
 .agent-failure small { display: block; color: #66645e; margin-top: 5px; overflow-wrap: anywhere; }
 .composer { grid-row: 4; border-top: 2px solid var(--ink); padding: 14px; background: var(--paper-2); }
 .composer textarea { background: var(--paper); color: var(--ink); border: 2px solid var(--ink); min-height: 84px; resize: vertical; }
+.prompt-queue { margin-top: 8px; border: 1px solid var(--ink); background: var(--paper); color: var(--ink); }
+.prompt-queue-head { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--ink); font-size: .66rem; font-weight: 900; letter-spacing: .06em; }
+.prompt-queue-list { display: grid; max-height: 132px; overflow-y: auto; }
+.prompt-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; border-top: 1px dashed var(--muted); }
+.prompt-queue-item:first-child { border-top: 0; }
+.prompt-queue-copy { min-width: 0; }
+.prompt-queue-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .7rem; }
+.prompt-queue-copy small { display: block; margin-top: 2px; color: #66645e; font-size: .6rem; text-transform: uppercase; }
+.composer .prompt-queue-remove { min-width: 0; padding: 4px 6px; border: 1px solid var(--danger); background: transparent; color: var(--danger); font-size: .6rem; }
+.composer .prompt-queue-remove:hover { background: var(--danger); color: var(--ink); }
 .composer-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 10px; }
 .file-rule { color: #66645e; font-size: .7rem; }
 .composer button { background: var(--ink); color: var(--paper); border-color: var(--ink); min-width: 110px; }

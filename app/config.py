@@ -24,6 +24,7 @@ from .constants import (
     DEFAULT_RUNNER_SOCKET_READ_BYTES,
     DEFAULT_WEB_FETCH_CHUNK_BYTES,
     DEFAULT_WEB_FETCH_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_WEB_FETCH_USER_AGENT,
 )
 from .models import (
     AGENT_IDS,
@@ -111,11 +112,27 @@ class Settings(BaseSettings):
         gt=0,
         alias="WEB_FETCH_CHUNK_BYTES",
     )
+    web_fetch_user_agents: list[str] = Field(
+        default_factory=lambda: [DEFAULT_WEB_FETCH_USER_AGENT],
+        min_length=1,
+        max_length=8,
+        alias="WEB_FETCH_USER_AGENTS",
+    )
+    web_fetch_user_agent_attempts: int = Field(
+        default=1,
+        ge=1,
+        le=2,
+        alias="WEB_FETCH_USER_AGENT_ATTEMPTS",
+    )
     web_fetch_max_bytes: int = Field(default=2_097_152, alias="WEB_FETCH_MAX_BYTES")
     web_fetch_max_text_chars: int = Field(default=60_000, alias="WEB_FETCH_MAX_TEXT_CHARS")
     web_fetch_max_redirects: int = Field(default=3, alias="WEB_FETCH_MAX_REDIRECTS")
     web_fetch_max_urls: int = Field(default=3, alias="WEB_FETCH_MAX_URLS")
     web_fetch_cache_seconds: int = Field(default=3600, alias="WEB_FETCH_CACHE_SECONDS")
+    web_fetch_search_fallback: bool = Field(
+        default=True,
+        alias="WEB_FETCH_SEARCH_FALLBACK",
+    )
     web_prompt_max_text_chars: int = Field(default=60_000, alias="WEB_PROMPT_MAX_TEXT_CHARS")
     runner_socket_path: Path = Field(
         default=Path("/workspace/runner/runner.sock"), alias="RUNNER_SOCKET_PATH"
@@ -190,6 +207,27 @@ class Settings(BaseSettings):
         normalized = " ".join(str(value).split())
         if not normalized:
             raise ValueError("USER_DISPLAY_NAME may not be blank.")
+        return normalized
+
+    @field_validator("web_fetch_user_agents")
+    @classmethod
+    def normalize_web_fetch_user_agents(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_value in value:
+            user_agent = str(raw_value)
+            if "\r" in user_agent or "\n" in user_agent:
+                raise ValueError("WEB_FETCH_USER_AGENTS may not contain line breaks.")
+            user_agent = " ".join(user_agent.split())
+            if not user_agent:
+                raise ValueError("WEB_FETCH_USER_AGENTS may not contain blank entries.")
+            if len(user_agent) > 512:
+                raise ValueError(
+                    "WEB_FETCH_USER_AGENTS entries must be at most 512 characters."
+                )
+            if user_agent not in normalized:
+                normalized.append(user_agent)
+        if not normalized:
+            raise ValueError("WEB_FETCH_USER_AGENTS must contain at least one entry.")
         return normalized
 
     @property

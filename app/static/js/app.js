@@ -2,6 +2,7 @@ import { api, setSessionToken, streamApi } from "./api.js";
 import { renderCodeViewer } from "./code_viewer.js";
 import { appendRoleSignal, createDemoController } from "./demo_controller.js";
 import { renderMarkdown } from "./markdown.js";
+import { TurnQueue } from "./turn_queue.js";
 
 const UI_DEFAULTS = Object.freeze({
   toastDurationMs: 4_200,
@@ -13,6 +14,7 @@ const UI_DEFAULTS = Object.freeze({
   conversationFollowThresholdPx: 72,
   agentFileMaxBytes: 15_000,
   agentTurnBeats: 3,
+  promptQueueMaxItems: 20,
   proposalListMaxItems: 20,
   narrowViewportQuery: "(max-width: 720px)",
 });
@@ -24,6 +26,8 @@ const state = {
   currentProject: "general",
   currentPersona: "agent_a",
   busy: false,
+  activePrompt: null,
+  promptQueue: new TurnQueue(UI_DEFAULTS.promptQueueMaxItems),
   progressNode: null,
   leftCollapsed: false,
   rightCollapsed: false,
@@ -56,6 +60,7 @@ const elements = {
   messages: $("#messages"),
   composer: $("#composer"),
   messageInput: $("#message-input"),
+  promptQueue: $("#prompt-queue"),
   sendButton: $("#send-button"),
   personaSelect: $("#persona-select"),
   personaSummary: $("#persona-summary"),
@@ -177,14 +182,58 @@ window.addEventListener("motif:session-reconnected", () => {
 function setBusy(busy) {
   state.busy = busy;
   const setupComplete = state.session?.setup_complete !== false;
-  elements.sendButton.disabled = busy || !setupComplete;
-  elements.messageInput.disabled = busy || !setupComplete;
-  elements.deleteProject.disabled = busy || !state.currentProject;
-  elements.sendButton.textContent = busy ? "THINKING..." : "SEND ↵";
+  elements.sendButton.disabled = !setupComplete;
+  elements.messageInput.disabled = !setupComplete;
+  elements.deleteProject.disabled = (
+    busy
+    || state.promptQueue.length > 0
+    || !state.currentProject
+  );
+  elements.sendButton.textContent = busy ? "QUEUE NEXT ↵" : "SEND ↵";
 }
 
 function currentParticipants() {
   return $$('.agent-toggle input[type="checkbox"]:checked').map((input) => input.value);
+}
+
+function renderPromptQueue() {
+  const queued = state.promptQueue.snapshot();
+  const active = state.activePrompt;
+  elements.promptQueue.replaceChildren();
+  elements.promptQueue.classList.toggle("hidden", !active && !queued.length);
+  if (!active && !queued.length) return;
+
+  const head = document.createElement("div");
+  head.className = "prompt-queue-head";
+  const activity = document.createElement("span");
+  activity.textContent = active ? "ROOM TURN RUNNING" : "TURN QUEUE";
+  const count = document.createElement("span");
+  count.textContent = `${queued.length} WAITING`;
+  head.append(activity, count);
+
+  const list = document.createElement("div");
+  list.className = "prompt-queue-list";
+  for (const turn of queued) {
+    const item = document.createElement("div");
+    item.className = "prompt-queue-item";
+    const copy = document.createElement("div");
+    copy.className = "prompt-queue-copy";
+    const message = document.createElement("strong");
+    message.textContent = turn.message;
+    message.title = turn.message;
+    const project = document.createElement("small");
+    project.textContent = `${turn.projectName} · ${turn.participants.length} AGENT${turn.participants.length === 1 ? "" : "S"} · ${turn.researchMode}`;
+    copy.append(message, project);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "prompt-queue-remove";
+    remove.dataset.queuedTurnId = turn.id;
+    remove.textContent = "REMOVE";
+    remove.setAttribute("aria-label", `Remove queued prompt: ${turn.message}`);
+    item.append(copy, remove);
+    list.append(item);
+  }
+  elements.promptQueue.append(head, list);
 }
 
 function userDisplayName() {
@@ -225,7 +274,11 @@ function renderProjects() {
   }
   const current = state.projects.find((project) => project.id === state.currentProject);
   elements.projectTitle.textContent = (current?.name || state.currentProject).toUpperCase();
-  elements.deleteProject.disabled = state.busy || !current;
+  elements.deleteProject.disabled = (
+    state.busy
+    || state.promptQueue.length > 0
+    || !current
+  );
 }
 
 function renderAgentOptions() {
@@ -423,12 +476,34 @@ function renderMessage(message) {
   if (sourceFailures.length) {
     const failureBox = document.createElement("div");
     failureBox.className = "source-failures";
+    const fallbackAgent = message.metadata?.search_fallback_agent;
     for (const failure of sourceFailures) {
       const row = document.createElement("div");
-      row.textContent = `SOURCE BLOCKED: ${failure.url || "URL"} — ${failure.detail || "Could not load the page."}`;
+      const isSearchFailure = failure.retrieval_method === "agent_search";
+      const attempts = failure.attempt_count
+        ? ` AFTER ${failure.attempt_count} DIRECT ATTEMPT${failure.attempt_count === 1 ? "" : "S"}`
+        : "";
+      const fallback = fallbackAgent && !isSearchFailure
+        ? ` · SEARCH FALLBACK: ${agentMeta[fallbackAgent]?.name?.toUpperCase() || fallbackAgent.toUpperCase()}`
+        : "";
+      const label = isSearchFailure
+        ? "SEARCH FALLBACK FOUND NO CITED EVIDENCE"
+        : "DIRECT RETRIEVAL FAILED";
+      row.textContent = `${label}${attempts}: ${failure.url || "URL"} — ${failure.detail || "Could not load the page."}${fallback}`;
       failureBox.append(row);
     }
     article.append(failureBox);
+  }
+
+  const provenance = message.metadata?.research_provenance;
+  if (provenance?.method === "agent_search") {
+    const provenanceBox = document.createElement("div");
+    provenanceBox.className = "source-provenance";
+    const citationCount = provenance.citations?.length || 0;
+    const provider = [provenance.provider, provenance.model].filter(Boolean).join(" / ");
+    const via = provider ? ` · VIA ${provider}` : "";
+    provenanceBox.textContent = `PROVENANCE: AGENT SEARCH AFTER DIRECT HTTP 403${via} · ${citationCount} CITATION${citationCount === 1 ? "" : "S"}`;
+    article.append(provenanceBox);
   }
 
   return article;
@@ -480,6 +555,14 @@ function progressText(event) {
   if (event.type === "source_fetch_complete") return `Loaded and stored: ${event.title || event.final_url}`;
   if (event.type === "source_fetch_cached") return `Reusing the recent project snapshot: ${event.title || event.final_url}`;
   if (event.type === "source_fetch_error") return `Could not load ${event.url}: ${event.detail}`;
+  if (event.type === "source_search_fallback") {
+    const count = event.urls?.length || 1;
+    return `${name} will search for ${count === 1 ? "the blocked source" : `${count} blocked sources`}...`;
+  }
+  if (event.type === "source_search_no_evidence") {
+    return `Search fallback found no cited evidence for ${event.url}.`;
+  }
+  if (event.type === "source_no_evidence") return event.detail;
   if (event.type === "agent_start") return `${name} is reading the room...`;
   if (event.type === "agent_followup_start") {
     const maxBeats = state.session?.max_agent_turn_beats
@@ -549,7 +632,7 @@ function updateTurnProgress(event) {
     return;
   }
   const row = document.createElement("div");
-  row.className = `turn-progress-event ${["agent_empty", "agent_timeout", "agent_no_response", "agent_provider_error", "source_fetch_error"].includes(event.type) ? "error" : ""}`;
+  row.className = `turn-progress-event ${["agent_empty", "agent_timeout", "agent_no_response", "agent_provider_error", "source_fetch_error", "source_search_no_evidence", "source_no_evidence"].includes(event.type) ? "error" : ""}`;
   row.textContent = text;
   panel.querySelector(".turn-progress-events").append(row);
   restoreMessagesViewport(viewport);
@@ -759,7 +842,7 @@ async function openWebSource(sourceId) {
     link.rel = "noopener noreferrer";
     link.textContent = `OPEN ORIGINAL ↗ ${source.final_url}`;
     const details = document.createElement("small");
-    details.textContent = `${source.content_type} · ${source.byte_count} BYTES · ${source.char_count} CHARACTERS${source.truncated ? " · TRUNCATED" : ""}`;
+    details.textContent = `${source.content_type} · ${source.byte_count} BYTES · ${source.char_count} CHARACTERS · ${(source.retrieval_method || "direct_http").toUpperCase()} · ${source.retrieval_attempts || 1} ATTEMPT${source.retrieval_attempts === 1 ? "" : "S"}${source.truncated ? " · TRUNCATED" : ""}`;
     const content = document.createElement("pre");
     content.textContent = source.content_text || "No extracted text.";
     elements.sourcePreview.append(title, link, details, content);
@@ -789,7 +872,7 @@ async function loadSources() {
     const title = document.createElement("span");
     title.textContent = source.title || source.final_url;
     const url = document.createElement("small");
-    url.textContent = `${source.final_url} · ${source.char_count} CHARS${source.truncated ? " · TRUNCATED" : ""}`;
+    url.textContent = `${source.final_url} · ${source.char_count} CHARS · ${(source.retrieval_method || "direct_http").toUpperCase()}${source.truncated ? " · TRUNCATED" : ""}`;
     open.append(title, url);
     open.addEventListener("click", () => openWebSource(source.id));
     const remove = document.createElement("button");
@@ -1211,8 +1294,12 @@ elements.composer.addEventListener("submit", async (event) => {
     if (!result) throw new Error("The server closed the response before returning a result.");
     const research = result.research;
     const sourceCount = result.web_sources?.length || 0;
-    elements.researchIndicator.textContent = sourceCount
+    elements.researchIndicator.textContent = research.evidence_status === "unavailable"
+      ? "NO WEB EVIDENCE · AGENTS SKIPPED"
+      : sourceCount
       ? `WEB: ${sourceCount} SHARED SOURCE${sourceCount === 1 ? "" : "S"}`
+      : research.search_fallback_agent
+        ? `SEARCH FALLBACK / ${agentMeta[research.search_fallback_agent].name.toUpperCase()}`
       : research.needs_search
         ? `SEARCH DISCOVERY UNAVAILABLE${research.lead_agent ? ` / ${agentMeta[research.lead_agent].name.toUpperCase()}` : ""}`
         : "NO SEARCH";

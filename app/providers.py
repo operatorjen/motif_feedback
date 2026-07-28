@@ -79,6 +79,7 @@ class DirectProviderClient:
         temperature: float,
         max_tokens: int,
         require_participation: bool = True,
+        enable_web_search: bool = False,
         progress_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> AgentCompletion:
         options = self._provider_options(provider)
@@ -97,6 +98,18 @@ class DirectProviderClient:
         if not model:
             raise ProviderError(
                 f"No direct {label} model ID is configured for this agent."
+            )
+        if enable_web_search and options.get("web_search_mode") != "responses":
+            raise ProviderError(f"{label} does not declare a compatible web-search capability.")
+        if enable_web_search:
+            return await self._run_search_agent(
+                provider=provider,
+                model=model,
+                messages=messages,
+                key=key,
+                options=options,
+                max_tokens=max_tokens,
+                progress_callback=progress_callback,
             )
 
         conversation = [dict(message) for message in messages]
@@ -184,6 +197,108 @@ class DirectProviderClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         return payload
+
+    def supports_web_search(self, provider: str) -> bool:
+        options = self._provider_options(provider)
+        return bool(
+            options
+            and options.get("web_search_mode") == "responses"
+        )
+
+    async def _run_search_agent(
+        self,
+        *,
+        provider: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        key: str,
+        options: dict[str, Any],
+        max_tokens: int,
+        progress_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    ) -> AgentCompletion:
+        if progress_callback is not None:
+            await progress_callback(
+                {
+                    "type": "model_request",
+                    "round": 1,
+                    "research_method": "agent_search",
+                }
+            )
+        payload = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+            "tools": [
+                {
+                    "type": "web_search",
+                    "search_context_size": options.get(
+                        "web_search_context_size",
+                        "medium",
+                    ),
+                }
+            ],
+        }
+        response_data = await self._post_response(provider, payload, key)
+        content_parts: list[str] = []
+        annotations: list[dict] = []
+        for item in response_data.get("output") or []:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if not isinstance(part, dict) or part.get("type") != "output_text":
+                    continue
+                text = self._normalize_content(part.get("text"))
+                if text:
+                    content_parts.append(text)
+                annotations.extend(
+                    self._normalize_search_annotations(part.get("annotations"))
+                )
+        if not content_parts:
+            output_text = self._normalize_content(response_data.get("output_text"))
+            if output_text:
+                content_parts.append(output_text)
+        content = "\n\n".join(content_parts).strip()
+        if not content:
+            raise ProviderNoResponse(
+                f"{options['label']} native search returned no written response."
+            )
+        return AgentCompletion(
+            content=content,
+            annotations=annotations,
+            raw_message=response_data,
+            tool_events=[],
+        )
+
+    @staticmethod
+    def _normalize_search_annotations(raw_annotations: Any) -> list[dict]:
+        annotations: list[dict] = []
+        seen: set[str] = set()
+        if not isinstance(raw_annotations, list):
+            return annotations
+        for annotation in raw_annotations:
+            if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+                continue
+            citation = annotation.get("url_citation")
+            if not isinstance(citation, dict):
+                citation = annotation
+            url = str(citation.get("url", "")).strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            normalized = {
+                "url": url,
+                "title": str(citation.get("title") or url),
+            }
+            for key in ("start_index", "end_index"):
+                if isinstance(citation.get(key), int):
+                    normalized[key] = citation[key]
+            annotations.append(
+                {
+                    "type": "url_citation",
+                    "url_citation": normalized,
+                }
+            )
+        return annotations
 
     @staticmethod
     def _response_message(
@@ -356,6 +471,34 @@ class DirectProviderClient:
         return public_tool_arguments(name, arguments)
 
     async def _post_chat(self, provider: str, payload: dict[str, Any], key: str) -> dict[str, Any]:
+        return await self._post_provider(
+            provider,
+            endpoint="chat/completions",
+            payload=payload,
+            key=key,
+        )
+
+    async def _post_response(
+        self,
+        provider: str,
+        payload: dict[str, Any],
+        key: str,
+    ) -> dict[str, Any]:
+        return await self._post_provider(
+            provider,
+            endpoint="responses",
+            payload=payload,
+            key=key,
+        )
+
+    async def _post_provider(
+        self,
+        provider: str,
+        *,
+        endpoint: str,
+        payload: dict[str, Any],
+        key: str,
+    ) -> dict[str, Any]:
         options = self._provider_options(provider)
         label = str(options["label"]) if options else provider.title()
         base_url = self._provider_base_url(provider)
@@ -372,7 +515,7 @@ class DirectProviderClient:
         try:
             async with self._client().stream(
                 "POST",
-                f"{base_url}/chat/completions",
+                f"{base_url}/{endpoint}",
                 headers=headers,
                 json=payload,
                 timeout=timeout,
@@ -438,6 +581,8 @@ class DirectProviderClient:
             "supports_temperature": not is_openai,
             "supports_tools": True,
             "reasoning_effort": "none" if is_openai else None,
+            "web_search_mode": "responses" if is_openai else "none",
+            "web_search_context_size": "medium",
         }
 
     def _provider_api_key(self, provider: str) -> str:

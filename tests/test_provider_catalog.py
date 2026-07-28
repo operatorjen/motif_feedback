@@ -65,6 +65,20 @@ def test_catalog_initializes_and_keyless_local_provider_is_ready(tmp_path: Path)
     assert registry.public_profiles()[1]["models"] == ["local-chat"]
 
 
+def test_legacy_openai_profile_inherits_responses_web_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    seed_path = tmp_path / "seed.yaml"
+    seed_path.write_text(SEED.replace("id: hosted", "id: openai"), encoding="utf-8")
+    store = ProviderCatalogStore(tmp_path / "state" / "providers.yaml", seed_path)
+    store.initialize()
+    registry = ProviderRegistry(fake_settings(), store)
+
+    assert registry.profile("openai").web_search_mode == "responses"
+    assert registry.profile("local").web_search_mode == "none"
+
+
 def test_custom_provider_key_is_loaded_from_declared_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -57,7 +57,16 @@ class UnsafeUrlError(WebSourceError):
 
 
 class PageFetchError(WebSourceError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        attempt_count: int = 1,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.attempt_count = max(1, int(attempt_count))
 
 
 @dataclass(frozen=True)
@@ -70,6 +79,8 @@ class FetchedPage:
     byte_count: int
     truncated: bool
     content_sha256: str
+    retrieval_method: str = "direct_http"
+    retrieval_attempts: int = 1
 
 
 class ReadableHTMLParser(HTMLParser):
@@ -218,14 +229,49 @@ class WebPageFetcher:
 
     async def fetch(self, requested_url: str) -> FetchedPage:
         requested = normalize_public_url(requested_url)
-        current = requested
         timeout = httpx.Timeout(
             self.settings.web_fetch_timeout_seconds,
             connect=self.settings.web_fetch_connect_timeout_seconds,
         )
+        profiles = self.settings.web_fetch_user_agents[
+            : self.settings.web_fetch_user_agent_attempts
+        ]
+        for attempt_index, user_agent in enumerate(profiles, start=1):
+            try:
+                return await self._fetch_once(
+                    requested,
+                    timeout=timeout,
+                    user_agent=user_agent,
+                    attempt_count=attempt_index,
+                )
+            except PageFetchError as exc:
+                exc.attempt_count = attempt_index
+                if exc.status_code != 403 or attempt_index >= len(profiles):
+                    raise
+        raise PageFetchError("The page fetch attempts ended unexpectedly.")
+
+    async def _fetch_once(
+        self,
+        requested: str,
+        *,
+        timeout: httpx.Timeout,
+        user_agent: str,
+        attempt_count: int,
+    ) -> FetchedPage:
+        current = requested
         headers = {
-            "Accept": "text/html, application/xhtml+xml, text/plain, application/json;q=0.8",
-            "User-Agent": "MotifFeedback/1.0 (user-requested read-only page fetch)",
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "text/plain;q=0.8,application/json;q=0.7,*/*;q=0.5"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "max-age=0",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": user_agent,
         }
         async with httpx.AsyncClient(
             timeout=timeout,
@@ -236,6 +282,7 @@ class WebPageFetcher:
         ) as client:
             for redirect_index in range(self.settings.web_fetch_max_redirects + 1):
                 await self._validate_target(current)
+                client.cookies.clear()
                 try:
                     async with client.stream("GET", current) as response:
                         if response.status_code in REDIRECT_STATUSES:
@@ -247,7 +294,11 @@ class WebPageFetcher:
                             current = normalize_public_url(urljoin(current, location))
                             continue
                         if response.status_code >= 400:
-                            raise PageFetchError(f"The page returned HTTP {response.status_code}.")
+                            raise PageFetchError(
+                                f"The page returned HTTP {response.status_code}.",
+                                status_code=response.status_code,
+                                attempt_count=attempt_count,
+                            )
                         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                         if content_type and content_type not in ALLOWED_CONTENT_TYPES:
                             raise PageFetchError(
@@ -270,6 +321,7 @@ class WebPageFetcher:
                             byte_count=len(body),
                             truncated=download_truncated or text_truncated,
                             content_sha256=sha256(body).hexdigest(),
+                            retrieval_attempts=attempt_count,
                         )
                 except httpx.TimeoutException as exc:
                     raise PageFetchError("The page timed out before it could be read.") from exc
@@ -409,6 +461,8 @@ class WebSourceService:
                         byte_count=fetched.byte_count,
                         truncated=fetched.truncated,
                         content_sha256=fetched.content_sha256,
+                        retrieval_method=fetched.retrieval_method,
+                        retrieval_attempts=fetched.retrieval_attempts,
                     )
                     await self._emit(
                         progress_callback,
@@ -416,7 +470,15 @@ class WebSourceService:
                     )
                 sources.append(source)
             except WebSourceError as exc:
-                failure = {"url": url, "detail": str(exc)}
+                failure = {
+                    "url": url,
+                    "detail": str(exc),
+                    "retrieval_method": "direct_http",
+                }
+                if isinstance(exc, PageFetchError):
+                    failure["attempt_count"] = exc.attempt_count
+                    if exc.status_code is not None:
+                        failure["status_code"] = exc.status_code
                 failures.append(failure)
                 await self._emit(progress_callback, {"type": "source_fetch_error", **failure})
         return sources, failures
@@ -437,7 +499,8 @@ class WebSourceService:
             key: source[key]
             for key in (
                 "id", "requested_url", "final_url", "title", "content_type",
-                "byte_count", "char_count", "truncated", "fetched_at",
+                "byte_count", "char_count", "truncated", "retrieval_method",
+                "retrieval_attempts", "fetched_at",
             )
             if key in source
         }

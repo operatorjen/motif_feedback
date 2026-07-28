@@ -97,6 +97,11 @@ Each agent can use a different provider and model. The persistent provider catal
 under **SETUP → PROVIDER CATALOG** and supports OpenAI-compatible `/chat/completions`
 endpoints, including compatible local servers.
 
+Provider profiles can declare `web_search_mode: responses` when their endpoint supports the
+Responses API and its built-in `web_search` tool. The built-in OpenAI profile enables this
+capability by default; other hosted or custom profiles remain `none` unless explicitly configured.
+Search capability is separate from ordinary Chat Completions function-tool support.
+
 From Docker, a model server running on the host can usually be reached at:
 
 ```text
@@ -131,8 +136,28 @@ sharing for that specific file. Agents cannot overwrite uploaded user files, del
 projects, run a shell, install packages, or control Docker.
 
 Public HTTP(S) URLs pasted into a prompt can be fetched through a bounded read-only page reader
-and stored under the current project. The application does not provide agents with arbitrary
-network access or general web-search discovery.
+and stored under the current project. An optional ordered `WEB_FETCH_USER_AGENTS` JSON list lives
+only in the ignored local `.env`; `WEB_FETCH_USER_AGENT_ATTEMPTS` chooses whether the reader uses
+one or, at most, two profiles. No URLs or domains are configured or hardcoded.
+
+When all configured direct attempts return HTTP 403, research modes other than **OFF** can route
+the exact failed URL to one selected agent whose provider declares compatible native search.
+That agent is instructed to try the exact URL and domain first, cite web-derived claims, disclose
+substitute sources, and never claim it directly read a page that remained blocked. Later agents
+receive its cited response through the room transcript instead of duplicating the search. Search
+output without provider-returned URL citations is treated as no evidence and is not stored as an
+agent response.
+Direct snapshots record their retrieval method and attempt count; search-grounded messages record
+the failed direct attempt and returned citations as separate provenance.
+
+If every supplied page fails and no compatible search fallback is available—or the fallback
+returns no cited evidence—the room records the retrieval outcome and skips all ordinary agent
+turns. This prevents agents from spending tokens responding only to a source error. If at least
+one supplied page was retrieved successfully, agents may still respond from that available
+evidence while failures remain visible.
+
+The direct reader still does not execute JavaScript, retain cookies, solve browser challenges, or
+provide agents with arbitrary network access or unrestricted web-search discovery.
 
 Agents may create Python files, but they cannot execute them. A run begins only when the user
 selects a `.py` file and presses **RUN**. The project is copied into a separate runner container

@@ -77,8 +77,9 @@
       <form class="composer" id="composer">
         <label class="sr-only" for="message-input">Message the room</label>
         <textarea id="message-input" rows="4" maxlength="50000" placeholder="Talk to the room, paste a URL to examine, or ask them to make, save, or inspect something..."></textarea>
+        <div class="prompt-queue hidden" id="prompt-queue" aria-live="polite"></div>
         <div class="composer-foot">
-          <span class="file-rule">Agents can revise their own files. Only you can remove files.</span>
+          <span class="file-rule">Keep typing while agents work. New prompts wait in this tab and run in order.</span>
           <button id="send-button" type="submit">SEND</button>
         </div>
       </form>
@@ -183,7 +184,7 @@
 
       <section class="tab-panel" id="tab-sources">
         <div class="section-label">BOUNDED WEB SOURCES</div>
-        <p class="microcopy source-copy">URLs pasted into a prompt are fetched once without cookies or scripts, reduced to readable text, and shared with the room. Remove any stored snapshot here.</p>
+        <p class="microcopy source-copy">URLs pasted into a prompt use the bounded local fetch profiles without cookies or scripts. A 403 can route the exact URL to one compatible search-capable agent. If neither path produces usable evidence, ordinary agent turns are skipped. Remove any stored snapshot here.</p>
         <div class="source-list" id="source-list"></div>
         <div class="section-label preview-label">EXTRACTED PAGE TEXT</div>
         <div class="source-preview" id="source-preview">Select a source.</div>

@@ -161,6 +161,8 @@ class Storage:
                     char_count INTEGER NOT NULL,
                     truncated INTEGER NOT NULL DEFAULT 0,
                     content_sha256 TEXT NOT NULL,
+                    retrieval_method TEXT NOT NULL DEFAULT 'direct_http',
+                    retrieval_attempts INTEGER NOT NULL DEFAULT 1,
                     fetched_at TEXT NOT NULL,
                     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
                 );
@@ -184,6 +186,20 @@ class Storage:
             if "shared_agent_edit" not in ownership_columns:
                 connection.execute(
                     "ALTER TABLE file_ownership ADD COLUMN shared_agent_edit INTEGER NOT NULL DEFAULT 0"
+                )
+            web_source_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(web_sources)").fetchall()
+            }
+            if "retrieval_method" not in web_source_columns:
+                connection.execute(
+                    "ALTER TABLE web_sources ADD COLUMN "
+                    "retrieval_method TEXT NOT NULL DEFAULT 'direct_http'"
+                )
+            if "retrieval_attempts" not in web_source_columns:
+                connection.execute(
+                    "ALTER TABLE web_sources ADD COLUMN "
+                    "retrieval_attempts INTEGER NOT NULL DEFAULT 1"
                 )
         if not self.list_projects():
             self.create_project("General", project_id="general")
@@ -899,6 +915,8 @@ class Storage:
         byte_count: int,
         truncated: bool,
         content_sha256: str,
+        retrieval_method: str = "direct_http",
+        retrieval_attempts: int = 1,
     ) -> dict:
         self.get_project(project_id)
         source_id = uuid.uuid4().hex
@@ -909,8 +927,8 @@ class Storage:
                 INSERT INTO web_sources(
                     id, project_id, requested_url, final_url, title, content_text,
                     content_type, byte_count, char_count, truncated,
-                    content_sha256, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content_sha256, retrieval_method, retrieval_attempts, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_id,
@@ -924,6 +942,8 @@ class Storage:
                     len(content_text),
                     int(bool(truncated)),
                     content_sha256,
+                    str(retrieval_method)[:80] or "direct_http",
+                    max(1, int(retrieval_attempts)),
                     fetched_at,
                 ),
             )
@@ -940,7 +960,7 @@ class Storage:
                 """
                 SELECT id, project_id, requested_url, final_url, title, content_text,
                        content_type, byte_count, char_count, truncated,
-                       content_sha256, fetched_at
+                       content_sha256, retrieval_method, retrieval_attempts, fetched_at
                 FROM web_sources WHERE project_id = ? AND id = ?
                 """,
                 (project_id, source_id),
@@ -956,7 +976,7 @@ class Storage:
                 """
                 SELECT id, project_id, requested_url, final_url, title, content_text,
                        content_type, byte_count, char_count, truncated,
-                       content_sha256, fetched_at
+                       content_sha256, retrieval_method, retrieval_attempts, fetched_at
                 FROM web_sources
                 WHERE project_id = ? AND requested_url = ?
                 ORDER BY fetched_at DESC LIMIT 1
@@ -977,7 +997,7 @@ class Storage:
                 """
                 SELECT id, project_id, requested_url, final_url, title,
                        content_type, byte_count, char_count, truncated,
-                       content_sha256, fetched_at
+                       content_sha256, retrieval_method, retrieval_attempts, fetched_at
                 FROM web_sources WHERE project_id = ?
                 ORDER BY fetched_at DESC LIMIT ?
                 """,
@@ -1200,6 +1220,42 @@ class Storage:
                 (project_id, safe_limit),
             ).fetchall()
         return [self._row_to_message(row) for row in rows]
+
+    def update_message_metadata(
+        self,
+        project_id: str,
+        message_id: str,
+        updates: dict,
+    ) -> None:
+        with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
+            row = connection.execute(
+                """
+                SELECT metadata_json FROM messages
+                WHERE project_id = ? AND id = ?
+                """,
+                (project_id, message_id),
+            ).fetchone()
+            if row is None:
+                raise StorageError(f"Message {message_id!r} was not found.")
+            try:
+                metadata = json.loads(row["metadata_json"])
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.update(updates)
+            connection.execute(
+                """
+                UPDATE messages SET metadata_json = ?
+                WHERE project_id = ? AND id = ?
+                """,
+                (
+                    json.dumps(metadata, ensure_ascii=False),
+                    project_id,
+                    message_id,
+                ),
+            )
 
     def recent_messages(self, project_id: str, limit: int) -> list[dict]:
         safe_limit = min(max(limit, 1), STORED_MEMORY_QUERY_MAX_ROWS)

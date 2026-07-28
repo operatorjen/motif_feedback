@@ -65,12 +65,24 @@ microVM when code may be hostile or stronger isolation is required.
   A demo can still attempt to navigate its own iframe document, so this is not equivalent to the
   runner's network isolation.
 - URLs pasted by the user are fetched by a read-only server broker. It accepts HTTP(S) on ports
-  80/443, sends no application cookies or provider credentials, does not execute JavaScript,
-  validates redirects, limits response size and time, and blocks local, private, reserved,
-  link-local, and Docker-host destinations.
+  80/443, can send one or two locally configured user-agent profiles but no application cookies
+  or provider credentials, does not execute JavaScript, validates redirects, limits response size
+  and time, and blocks local, private, reserved, link-local, and Docker-host destinations.
+- If every configured direct attempt returns HTTP 403 and research is enabled, the exact failed
+  URL may be included in one selected agent request with provider-native search enabled. This
+  sends the URL and related prompt context to the selected provider and its search infrastructure.
+  Providers without a declared compatible search mode are not asked to search.
+- Provider search output is usable evidence only when it includes at least one returned URL
+  citation. If no direct snapshot and no cited search evidence are available, ordinary agent turns
+  are skipped and uncited search text is not persisted as an agent response.
+- Direct snapshots and search-derived answers remain distinct. Stored provenance identifies the
+  direct retrieval method and attempt count or, for search fallback, the provider/model, failed
+  URL/status, and provider-returned citations. A citation does not prove that the provider opened
+  the original page; agents are instructed to disclose substitute evidence.
 - Fetched page text is marked as untrusted evidence in agent prompts. Prompt injection is still
-  possible at the model level. DNS and URL checks reduce SSRF risk but are not a substitute for
-  an outbound proxy or firewall when stronger egress control is required.
+  possible at the model level, including through provider search results. DNS and URL checks
+  reduce SSRF risk for direct retrieval but are not a substitute for an outbound proxy or
+  firewall when stronger egress control is required.
 
 ### Personas, persistence, and deletion
 

@@ -46,6 +46,14 @@ class FakeStorage:
     def recent_messages(self, _project_id, _limit):
         return list(self.messages)
 
+    def update_message_metadata(self, project_id, message_id, updates):
+        message = next(
+            message
+            for message in self.messages
+            if message["project_id"] == project_id and message["id"] == message_id
+        )
+        message["metadata"].update(updates)
+
     def list_memory_events(self, project_id, agent_id, limit=20):
         matching = [
             event for event in self.memory_events
@@ -128,6 +136,85 @@ class OneFollowupBeat:
         )
 
 
+class SearchFallbackClient:
+    def __init__(self, *, cited=True):
+        self.calls = []
+        self.cited = cited
+
+    @staticmethod
+    def supports_web_search(provider):
+        return provider == "openai"
+
+    async def run_agent(self, *, tool_context, enable_web_search=False, **_kwargs):
+        self.calls.append(
+            {
+                "agent_id": tool_context.agent_id,
+                "enable_web_search": enable_web_search,
+            }
+        )
+        return AgentCompletion(
+            content="Search-grounded response.",
+            annotations=(
+                [
+                    {
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": "https://bigthink.com/recovered",
+                            "title": "Recovered source",
+                        },
+                    }
+                ]
+                if enable_web_search and self.cited
+                else []
+            ),
+            raw_message={},
+            tool_events=[],
+        )
+
+
+class BlockedWebSourceService:
+    @staticmethod
+    async def collect_for_prompt(_project_id, _message, _progress_callback):
+        return [], [
+            {
+                "url": "https://bigthink.com/article",
+                "detail": "The page returned HTTP 403.",
+                "status_code": 403,
+                "attempt_count": 1,
+                "retrieval_method": "direct_http",
+            }
+        ]
+
+
+class PartiallyRetrievedWebSourceService:
+    @staticmethod
+    async def collect_for_prompt(_project_id, _message, _progress_callback):
+        return [
+            {
+                "id": "source-1",
+                "requested_url": "https://example.com/readable",
+                "final_url": "https://example.com/readable",
+                "title": "Readable source",
+                "content_text": "Useful retrieved evidence.",
+                "content_type": "text/html",
+                "byte_count": 26,
+                "char_count": 26,
+                "truncated": False,
+                "retrieval_method": "direct_http",
+                "retrieval_attempts": 1,
+                "fetched_at": "2026-07-21T00:00:00+00:00",
+            }
+        ], [
+            {
+                "url": "https://bigthink.com/article",
+                "detail": "The page returned HTTP 403.",
+                "status_code": 403,
+                "attempt_count": 1,
+                "retrieval_method": "direct_http",
+            }
+        ]
+
+
 def fake_settings():
     return SimpleNamespace(
         max_context_messages=30,
@@ -136,6 +223,8 @@ def fake_settings():
         local_memory_context_events=8,
         global_memory_context_events=6,
         agent_file_byte_limit=15_000,
+        web_fetch_search_fallback=True,
+        web_prompt_max_text_chars=60_000,
     )
 
 
@@ -172,7 +261,7 @@ def test_timeout_passes_turn_to_remaining_agents():
                     "agent_a": "provider/a",
                     "agent_b": "provider/b",
                     "agent_c": "provider/c",
-                }
+                },
             ),
             progress_callback=report,
         )
@@ -220,6 +309,193 @@ def test_timeout_passes_turn_to_remaining_agents():
         "response",
     ]
     assert [event["agent_id"] for event in storage.global_memory_events] == ["agent_c"]
+
+
+def test_403_routes_one_search_capable_agent_and_stores_provenance():
+    storage = FakeStorage()
+    client = SearchFallbackClient()
+    orchestrator = Orchestrator(
+        fake_settings(),
+        storage,
+        FakePersonas(),
+        client,
+        SearchRouter(),
+        BlockedWebSourceService(),
+    )
+
+    result = asyncio.run(
+        orchestrator.chat(
+            ChatRequest(
+                project_id="test-project",
+                message="Read https://bigthink.com/article",
+                participants=["agent_a", "agent_b"],
+                research_mode="auto",
+            ),
+            RuntimeConfig(
+                providers={
+                    "agent_a": "gemini",
+                    "agent_b": "openai",
+                    "agent_c": "deepseek",
+                },
+                models={
+                    "agent_a": "gemini-test",
+                    "agent_b": "gpt-5.2",
+                    "agent_c": "deepseek-test",
+                },
+            ),
+        )
+    )
+
+    assert result.research["search_fallback_agent"] == "agent_b"
+    assert client.calls[0] == {
+        "agent_id": "agent_b",
+        "enable_web_search": True,
+    }
+    provenance = result.messages[0]["metadata"]["research_provenance"]
+    assert provenance["method"] == "agent_search"
+    assert provenance["trigger"] == "direct_http_403"
+    assert provenance["provider"] == "openai"
+    assert provenance["model"] == "gpt-5.2"
+    assert provenance["direct_retrieval"][0]["attempt_count"] == 1
+    assert provenance["citations"][0]["title"] == "Recovered source"
+    assert result.research["evidence_status"] == "search_cited"
+    assert result.research["agent_turns_skipped"] is False
+
+
+def test_unretrievable_page_without_search_capability_skips_all_agent_prompts():
+    storage = FakeStorage()
+    client = SearchFallbackClient()
+    orchestrator = Orchestrator(
+        fake_settings(),
+        storage,
+        FakePersonas(),
+        client,
+        SearchRouter(),
+        BlockedWebSourceService(),
+    )
+
+    result = asyncio.run(
+        orchestrator.chat(
+            ChatRequest(
+                project_id="test-project",
+                message="Read https://bigthink.com/article",
+                participants=["agent_a"],
+                research_mode="auto",
+            ),
+            RuntimeConfig(
+                providers={
+                    "agent_a": "gemini",
+                    "agent_b": "openai",
+                    "agent_c": "deepseek",
+                },
+                models={
+                    "agent_a": "gemini-test",
+                    "agent_b": "gpt-5.2",
+                    "agent_c": "deepseek-test",
+                },
+            ),
+        )
+    )
+
+    assert client.calls == []
+    assert result.messages == []
+    assert result.research["evidence_status"] == "unavailable"
+    assert result.research["agent_turns_skipped"] is True
+    assert [message["role"] for message in storage.messages] == ["user"]
+    assert storage.messages[0]["metadata"]["agent_turns_skipped"] is True
+
+
+def test_uncited_search_fallback_stops_before_remaining_agent_prompts():
+    storage = FakeStorage()
+    client = SearchFallbackClient(cited=False)
+    orchestrator = Orchestrator(
+        fake_settings(),
+        storage,
+        FakePersonas(),
+        client,
+        SearchRouter(),
+        BlockedWebSourceService(),
+    )
+
+    result = asyncio.run(
+        orchestrator.chat(
+            ChatRequest(
+                project_id="test-project",
+                message="Read https://bigthink.com/article",
+                participants=["agent_a", "agent_b"],
+                research_mode="auto",
+            ),
+            RuntimeConfig(
+                providers={
+                    "agent_a": "gemini",
+                    "agent_b": "openai",
+                    "agent_c": "deepseek",
+                },
+                models={
+                    "agent_a": "gemini-test",
+                    "agent_b": "gpt-5.2",
+                    "agent_c": "deepseek-test",
+                },
+            ),
+        )
+    )
+
+    assert client.calls == [
+        {"agent_id": "agent_b", "enable_web_search": True}
+    ]
+    assert result.messages == []
+    assert result.research["evidence_status"] == "unavailable"
+    assert result.research["agent_turns_skipped"] is True
+    assert result.source_failures[-1]["retrieval_method"] == "agent_search"
+    assert storage.messages[0]["metadata"]["web_source_failures"][-1][
+        "retrieval_method"
+    ] == "agent_search"
+
+
+def test_available_direct_evidence_allows_agent_turns_despite_another_failed_url():
+    storage = FakeStorage()
+    client = SearchFallbackClient()
+    orchestrator = Orchestrator(
+        fake_settings(),
+        storage,
+        FakePersonas(),
+        client,
+        SearchRouter(),
+        PartiallyRetrievedWebSourceService(),
+    )
+
+    result = asyncio.run(
+        orchestrator.chat(
+            ChatRequest(
+                project_id="test-project",
+                message=(
+                    "Compare https://example.com/readable with "
+                    "https://bigthink.com/article"
+                ),
+                participants=["agent_a"],
+                research_mode="auto",
+            ),
+            RuntimeConfig(
+                providers={
+                    "agent_a": "gemini",
+                    "agent_b": "openai",
+                    "agent_c": "deepseek",
+                },
+                models={
+                    "agent_a": "gemini-test",
+                    "agent_b": "gpt-5.2",
+                    "agent_c": "deepseek-test",
+                },
+            ),
+        )
+    )
+
+    assert client.calls == [
+        {"agent_id": "agent_a", "enable_web_search": False}
+    ]
+    assert len(result.messages) == 1
+    assert result.research["evidence_status"] == "direct"
+    assert result.research["agent_turns_skipped"] is False
 
 
 def test_agent_can_choose_a_second_visible_beat_without_blocking_next_agent():
@@ -438,6 +714,9 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
         global_memory_history=[],
         web_sources=[],
         research_decision=SearchDecision(False, "none", None, "No search."),
+        source_failures=[],
+        web_search_enabled=False,
+        search_fallback_agent=None,
         role_signals=[],
         agent_id="agent_a",
     )

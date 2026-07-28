@@ -43,6 +43,9 @@ def test_operational_configuration_defaults_preserve_existing_behavior(tmp_path:
     assert settings.global_memory_context_events == 6
     assert settings.web_fetch_connect_timeout_seconds == 10
     assert settings.web_fetch_chunk_bytes == 65_536
+    assert settings.web_fetch_user_agent_attempts == 1
+    assert len(settings.web_fetch_user_agents) == 1
+    assert settings.web_fetch_search_fallback is True
     assert settings.runner_timeout_seconds == 65
     assert settings.runner_project_max_bytes == 8_000_000
     assert settings.runner_room_transcript_max_chars == 8_000
@@ -62,6 +65,8 @@ def test_operational_configuration_accepts_environment_style_overrides(tmp_path:
         MAX_AGENT_TURN_BEATS=2,
         RUNNER_INPUT_MAX_BYTES=24_000,
         RUNNER_INPUT_MESSAGE_MAX_BYTES=6_000,
+        WEB_FETCH_USER_AGENTS=["First local profile", "Second local profile"],
+        WEB_FETCH_USER_AGENT_ATTEMPTS=2,
     )
 
     assert settings.provider_participation_retries == 4
@@ -69,6 +74,28 @@ def test_operational_configuration_accepts_environment_style_overrides(tmp_path:
     assert settings.max_agent_turn_beats == 2
     assert settings.runner_input_max_bytes == 24_000
     assert settings.runner_input_message_max_bytes == 6_000
+    assert settings.web_fetch_user_agents == [
+        "First local profile",
+        "Second local profile",
+    ]
+    assert settings.web_fetch_user_agent_attempts == 2
+
+
+def test_web_fetch_user_agents_load_from_local_dotenv_json(tmp_path: Path):
+    env_path = tmp_path / "local.env"
+    env_path.write_text(
+        'WEB_FETCH_USER_AGENTS=["First local profile","Second local profile"]\n'
+        "WEB_FETCH_USER_AGENT_ATTEMPTS=2\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_path, WORKSPACE_ROOT=tmp_path)
+
+    assert settings.web_fetch_user_agents == [
+        "First local profile",
+        "Second local profile",
+    ]
+    assert settings.web_fetch_user_agent_attempts == 2
 
 
 def test_provider_status_includes_supported_non_default_provider(tmp_path: Path):
@@ -548,6 +575,30 @@ def test_project_scoped_reads_validate_and_query_with_one_connection(tmp_path: P
         with patch.object(storage, "connection", wraps=storage.connection) as connection:
             assert read()
             assert connection.call_count == 1
+
+
+def test_message_metadata_can_record_a_post_fetch_evidence_gate(tmp_path: Path):
+    _, storage, _, _ = make_services(tmp_path)
+    project = storage.create_project("Evidence gate")
+    message = storage.add_message(
+        project["id"],
+        "user",
+        "Read the supplied page.",
+        metadata={"evidence_status": "search_pending"},
+    )
+
+    storage.update_message_metadata(
+        project["id"],
+        message["id"],
+        {
+            "evidence_status": "unavailable",
+            "agent_turns_skipped": True,
+        },
+    )
+
+    stored = storage.list_messages(project["id"])[0]
+    assert stored["metadata"]["evidence_status"] == "unavailable"
+    assert stored["metadata"]["agent_turns_skipped"] is True
 
 
 def test_cross_project_memory_is_compact_provisional_and_source_labeled(tmp_path: Path):

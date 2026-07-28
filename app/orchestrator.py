@@ -95,10 +95,6 @@ class Orchestrator:
         )
         role_signals = pending_role_signals(earlier)
         order = self._speaker_order(request.message, participants, decision, earlier)
-        await self._emit_progress(
-            progress_callback,
-            {"type": "turn_start", "agents": order, "research": decision.model_dump()},
-        )
         web_sources: list[dict] = []
         source_failures: list[dict] = []
         if self.web_source_service is not None:
@@ -106,6 +102,56 @@ class Orchestrator:
                 request.project_id,
                 request.message,
                 progress_callback,
+            )
+        search_fallback_failures = [
+            failure
+            for failure in source_failures
+            if failure.get("status_code") == 403
+        ]
+        search_fallback_agent = self._select_search_fallback_agent(
+            order=order,
+            runtime=runtime,
+            decision=decision,
+            source_failures=search_fallback_failures,
+        )
+        if search_fallback_agent is not None and order[0] != search_fallback_agent:
+            order = [
+                search_fallback_agent,
+                *[agent_id for agent_id in order if agent_id != search_fallback_agent],
+            ]
+        research = {
+            **decision.model_dump(),
+            "search_fallback_agent": search_fallback_agent,
+            "search_fallback_urls": [
+                failure["url"] for failure in search_fallback_failures
+            ],
+            "evidence_status": (
+                "direct"
+                if web_sources
+                else "search_pending"
+                if search_fallback_agent is not None
+                else "unavailable"
+                if source_failures
+                else "not_requested"
+            ),
+            "agent_turns_skipped": bool(
+                source_failures
+                and not web_sources
+                and search_fallback_agent is None
+            ),
+        }
+        await self._emit_progress(
+            progress_callback,
+            {"type": "turn_start", "agents": order, "research": research},
+        )
+        if search_fallback_agent is not None:
+            await self._emit_progress(
+                progress_callback,
+                {
+                    "type": "source_search_fallback",
+                    "agent_id": search_fallback_agent,
+                    "urls": research["search_fallback_urls"],
+                },
             )
         public_sources = [
             WebSourceService.public_source(source) for source in web_sources
@@ -117,8 +163,28 @@ class Orchestrator:
             metadata={
                 "web_sources": public_sources,
                 "web_source_failures": source_failures,
+                "search_fallback_agent": search_fallback_agent,
+                "evidence_status": research["evidence_status"],
+                "agent_turns_skipped": research["agent_turns_skipped"],
             },
         )
+        if research["agent_turns_skipped"]:
+            await self._emit_progress(
+                progress_callback,
+                {
+                    "type": "source_no_evidence",
+                    "detail": (
+                        "No supplied page could be retrieved, so the selected agents "
+                        "were not prompted."
+                    ),
+                },
+            )
+            return await self._complete_room(
+                research=research,
+                web_sources=public_sources,
+                source_failures=source_failures,
+                progress_callback=progress_callback,
+            )
         recent = self.storage.recent_messages(
             request.project_id, self.settings.max_context_messages
         )
@@ -128,7 +194,7 @@ class Orchestrator:
         shared_context = self.persona_store.load_shared_context()
 
         for agent_id in order:
-            await self._run_agent_turn(
+            turn_status = await self._run_agent_turn(
                 agent_id=agent_id,
                 request=request,
                 runtime=runtime,
@@ -137,6 +203,8 @@ class Orchestrator:
                 web_sources=web_sources,
                 role_signals=role_signals,
                 decision=decision,
+                source_failures=source_failures,
+                search_fallback_agent=search_fallback_agent,
                 recent=recent,
                 public_sources=public_sources,
                 user_message_id=user_message["id"],
@@ -145,12 +213,63 @@ class Orchestrator:
                 agent_failures=agent_failures,
                 progress_callback=progress_callback,
             )
+            if agent_id == search_fallback_agent:
+                if turn_status == "search_cited":
+                    research["evidence_status"] = (
+                        "direct_and_search" if web_sources else "search_cited"
+                    )
+                elif turn_status in {"search_failed", "search_uncited"}:
+                    research["evidence_status"] = (
+                        "direct" if web_sources else "unavailable"
+                    )
+                    if not web_sources:
+                        research["agent_turns_skipped"] = True
+                self.storage.update_message_metadata(
+                    request.project_id,
+                    user_message["id"],
+                    {
+                        "web_source_failures": source_failures,
+                        "evidence_status": research["evidence_status"],
+                        "agent_turns_skipped": research["agent_turns_skipped"],
+                    },
+                )
+            if turn_status in {"search_failed", "search_uncited"} and not web_sources:
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        "type": "source_no_evidence",
+                        "detail": (
+                            "The search fallback returned no cited evidence, so the "
+                            "remaining agents were not prompted."
+                        ),
+                    },
+                )
+                break
 
-        response = RoomResponse(
+        return await self._complete_room(
             messages=visible_responses,
-            research=decision.model_dump(),
+            research=research,
             agent_failures=agent_failures,
             web_sources=public_sources,
+            source_failures=source_failures,
+            progress_callback=progress_callback,
+        )
+
+    async def _complete_room(
+        self,
+        *,
+        research: dict,
+        web_sources: list[dict],
+        source_failures: list[dict],
+        progress_callback: ProgressCallback | None,
+        messages: list[dict] | None = None,
+        agent_failures: list[dict] | None = None,
+    ) -> RoomResponse:
+        response = RoomResponse(
+            messages=messages or [],
+            research=research,
+            agent_failures=agent_failures or [],
+            web_sources=web_sources,
             source_failures=source_failures,
         )
         await self._emit_progress(progress_callback, {"type": "turn_complete"})
@@ -167,6 +286,8 @@ class Orchestrator:
         web_sources: list[dict],
         role_signals: list[dict],
         decision: SearchDecision,
+        source_failures: list[dict],
+        search_fallback_agent: str | None,
         recent: list[dict],
         public_sources: list[dict],
         user_message_id: str,
@@ -174,9 +295,10 @@ class Orchestrator:
         turn_transcript: list[dict],
         agent_failures: list[dict],
         progress_callback: ProgressCallback | None,
-    ) -> None:
+    ) -> str:
         persona = self.persona_store.load_persona(agent_id)
         display_name = persona.get("display_name", agent_id)
+        web_search_enabled = agent_id == search_fallback_agent
         await self._emit_progress(
             progress_callback,
             {"type": "agent_start", "agent_id": agent_id, "display_name": display_name},
@@ -222,6 +344,9 @@ class Orchestrator:
             global_memory_history=global_memory_history,
             web_sources=web_sources,
             research_decision=decision,
+            source_failures=source_failures,
+            web_search_enabled=web_search_enabled,
+            search_fallback_agent=search_fallback_agent,
             role_signals=role_signals,
             agent_id=agent_id,
         )
@@ -239,6 +364,7 @@ class Orchestrator:
                 runtime=runtime,
                 messages=messages,
                 tools=tools,
+                enable_web_search=web_search_enabled,
                 progress_callback=progress_callback,
             )
         except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
@@ -253,7 +379,26 @@ class Orchestrator:
                 turn_transcript=turn_transcript,
                 progress_callback=progress_callback,
             )
-            return
+            if web_search_enabled:
+                await self._record_search_evidence_failure(
+                    source_failures=source_failures,
+                    runtime=runtime,
+                    agent_id=agent_id,
+                    detail=f"Search fallback failed: {exc}",
+                    progress_callback=progress_callback,
+                )
+                return "search_failed"
+            return "completed"
+
+        if web_search_enabled and not self._annotation_sources(completion.annotations):
+            await self._record_search_evidence_failure(
+                source_failures=source_failures,
+                runtime=runtime,
+                agent_id=agent_id,
+                detail="Search fallback returned no cited evidence.",
+                progress_callback=progress_callback,
+            )
+            return "search_uncited"
 
         stored = self._store_completion(
             completion=completion,
@@ -262,7 +407,13 @@ class Orchestrator:
             runtime=runtime,
             user_message_id=user_message_id,
             public_sources=public_sources,
-            research_enabled=bool(web_sources),
+            research_enabled=bool(web_sources) or web_search_enabled,
+            research_provenance=self._research_provenance(
+                source_failures,
+                completion,
+                provider=runtime.providers[agent_id],
+                model=runtime.models[agent_id],
+            ) if web_search_enabled else None,
             turn_beat=1,
         )
         visible_responses.append(stored)
@@ -284,12 +435,13 @@ class Orchestrator:
             tools=tools,
             user_message_id=user_message_id,
             public_sources=public_sources,
-            research_enabled=bool(web_sources),
+            research_enabled=bool(web_sources) or web_search_enabled,
             visible_responses=visible_responses,
             turn_transcript=turn_transcript,
             agent_failures=agent_failures,
             progress_callback=progress_callback,
         )
+        return "search_cited" if web_search_enabled else "completed"
 
     def _agent_messages(
         self,
@@ -327,6 +479,7 @@ class Orchestrator:
         runtime: RuntimeConfig,
         messages: list[dict],
         tools: list[dict],
+        enable_web_search: bool,
         progress_callback: ProgressCallback | None,
     ) -> AgentCompletion:
         async def report_agent_progress(event: dict[str, Any]) -> None:
@@ -353,6 +506,7 @@ class Orchestrator:
             temperature=runtime.temperature,
             max_tokens=runtime.max_tokens,
             require_participation=True,
+            enable_web_search=enable_web_search,
             progress_callback=report_agent_progress,
         )
 
@@ -366,23 +520,27 @@ class Orchestrator:
         user_message_id: str,
         public_sources: list[dict],
         research_enabled: bool,
+        research_provenance: dict[str, Any] | None,
         turn_beat: int,
     ) -> dict:
         content = completion.content.strip()
+        metadata = {
+            "research_enabled": research_enabled,
+            "tool_events": completion.tool_events,
+            "user_message_id": user_message_id,
+            "locally_generated_action_summary": completion.locally_generated,
+            "web_sources": public_sources,
+            "turn_beat": turn_beat,
+        }
+        if research_provenance is not None:
+            metadata["research_provenance"] = research_provenance
         stored = self.storage.add_message(
             request.project_id,
             "agent",
             content,
             agent_id=agent_id,
             annotations=completion.annotations,
-            metadata={
-                "research_enabled": research_enabled,
-                "tool_events": completion.tool_events,
-                "user_message_id": user_message_id,
-                "locally_generated_action_summary": completion.locally_generated,
-                "web_sources": public_sources,
-                "turn_beat": turn_beat,
-            },
+            metadata=metadata,
         )
         successful_actions = any(
             event.get("result", {}).get("ok") is not False
@@ -455,6 +613,7 @@ class Orchestrator:
                     runtime=runtime,
                     messages=followup_messages,
                     tools=tools,
+                    enable_web_search=False,
                     progress_callback=progress_callback,
                 )
             except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
@@ -480,6 +639,7 @@ class Orchestrator:
                 user_message_id=user_message_id,
                 public_sources=public_sources,
                 research_enabled=research_enabled,
+                research_provenance=None,
                 turn_beat=beat_number,
             )
             visible_responses.append(stored)
@@ -600,6 +760,98 @@ class Orchestrator:
     ) -> None:
         if callback is not None:
             await callback(event)
+
+    def _select_search_fallback_agent(
+        self,
+        *,
+        order: list[str],
+        runtime: RuntimeConfig,
+        decision: SearchDecision,
+        source_failures: list[dict],
+    ) -> str | None:
+        if (
+            not source_failures
+            or not decision.needs_search
+            or not getattr(self.settings, "web_fetch_search_fallback", True)
+        ):
+            return None
+        supports_web_search = getattr(
+            self.provider_client,
+            "supports_web_search",
+            None,
+        )
+        if not callable(supports_web_search):
+            return None
+        return next(
+            (
+                agent_id
+                for agent_id in order
+                if supports_web_search(runtime.providers[agent_id])
+            ),
+            None,
+        )
+
+    async def _record_search_evidence_failure(
+        self,
+        *,
+        source_failures: list[dict],
+        runtime: RuntimeConfig,
+        agent_id: str,
+        detail: str,
+        progress_callback: ProgressCallback | None,
+    ) -> None:
+        failed_urls = [
+            str(failure.get("url", ""))
+            for failure in source_failures
+            if failure.get("url")
+            and failure.get("status_code") == 403
+            and failure.get("retrieval_method") == "direct_http"
+        ]
+        for url in failed_urls:
+            failure = {
+                "url": url,
+                "detail": detail,
+                "retrieval_method": "agent_search",
+                "provider": runtime.providers[agent_id],
+                "model": runtime.models[agent_id],
+            }
+            source_failures.append(failure)
+            await self._emit_progress(
+                progress_callback,
+                {"type": "source_search_no_evidence", **failure},
+            )
+
+    @classmethod
+    def _research_provenance(
+        cls,
+        source_failures: list[dict],
+        completion: AgentCompletion,
+        *,
+        provider: str,
+        model: str,
+    ) -> dict[str, Any]:
+        failures = [
+            {
+                key: failure[key]
+                for key in (
+                    "url",
+                    "status_code",
+                    "attempt_count",
+                    "retrieval_method",
+                )
+                if key in failure
+            }
+            for failure in source_failures
+            if failure.get("status_code") == 403
+        ]
+        return {
+            "method": "agent_search",
+            "trigger": "direct_http_403",
+            "provider": provider,
+            "model": model,
+            "direct_retrieval": failures,
+            "citations": cls._annotation_sources(completion.annotations),
+        }
 
     def _speaker_order(
         self,
@@ -865,6 +1117,9 @@ class Orchestrator:
         global_memory_history: list[dict],
         web_sources: list[dict],
         research_decision: SearchDecision,
+        source_failures: list[dict],
+        web_search_enabled: bool,
+        search_fallback_agent: str | None,
         role_signals: list[dict],
         agent_id: str,
     ) -> str:
@@ -889,20 +1144,59 @@ class Orchestrator:
                 "to mark disagreement or carry the thought forward. Agreement is allowed; add a "
                 "question, implication, or observation only when it contributes something real."
             )
-        research_instruction = (
-            f"{user_name} supplied one or more web pages, and bounded read-only snapshots appear after the "
-            "room transcript. Analyze those snapshots as evidence and identify the source URL when "
-            "making claims from them. You did not independently browse beyond those supplied URLs."
-            if web_sources
-            else (
-                "No URL snapshot was loaded, and direct-provider mode does not currently have an "
-                "external search-discovery service. "
-                "Be explicit that you did not browse, use grounded findings already present in the "
-                "room, and do not pretend you searched independently."
-                if research_decision.needs_search
-                else "No online search is required unless the user explicitly changes the request."
+        failed_urls = [
+            str(failure.get("url", ""))
+            for failure in source_failures
+            if failure.get("url") and failure.get("status_code") == 403
+        ]
+        if web_search_enabled and failed_urls:
+            snapshot_note = (
+                " Other supplied URLs were retrieved directly as bounded snapshots after the "
+                "room transcript; keep those snapshots distinct from search-derived evidence."
+                if web_sources
+                else ""
             )
-        )
+            research_instruction = (
+                "Direct read-only retrieval failed for these user-supplied URLs:\n"
+                + "\n".join(f"- {url}" for url in failed_urls)
+                + "\nYour provider-native web search is enabled for this response. Search for "
+                "each exact URL and its domain first. If the original page remains unavailable, "
+                "use clearly identified substitute sources. Cite every web-derived claim through "
+                "the provider's URL citations. Never say you read the original page unless search "
+                "actually recovered it, and distinguish direct retrieval failure from "
+                "search-derived evidence."
+                + snapshot_note
+            )
+        elif web_sources:
+            research_instruction = (
+                f"{user_name} supplied one or more web pages, and bounded read-only snapshots "
+                "appear after the room transcript. Analyze those snapshots as evidence and "
+                "identify the source URL when making claims from them. You did not independently "
+                "browse beyond those supplied URLs."
+            )
+        elif failed_urls and search_fallback_agent is not None:
+            research_instruction = (
+                "Direct retrieval of the supplied URL failed. Another selected participant is "
+                "the designated search lead. Use only cited findings that already appear in the "
+                "room transcript; do not claim that you independently searched or read the "
+                "blocked page."
+            )
+        elif failed_urls:
+            research_instruction = (
+                "Direct retrieval of the supplied URL failed and no selected provider declares a "
+                "compatible search capability. Be explicit that the page was not read, use only "
+                "grounded findings already present in the room, and do not invent search results."
+            )
+        elif research_decision.needs_search:
+            research_instruction = (
+                "No URL snapshot was loaded, and no direct retrieval failure triggered the "
+                "provider-native search fallback. Be explicit that you did not browse and do not "
+                "pretend you searched independently."
+            )
+        else:
+            research_instruction = (
+                "No online search is required unless the user explicitly changes the request."
+            )
         return f"""
 You are {display_name}, one persistent participant in {user_name}'s local motif-feedback room—a shared cognitive workspace with separately governed agent identities and memories.
 
@@ -1184,6 +1478,8 @@ TURN CONTRACT
                 f"Requested URL: {source.get('requested_url', '')}\n"
                 f"Final URL: {source.get('final_url', '')}\n"
                 f"Fetched: {source.get('fetched_at', '')}\n"
+                f"Retrieval method: {source.get('retrieval_method', 'direct_http')}\n"
+                f"Retrieval attempts: {source.get('retrieval_attempts', 1)}\n"
                 f"Snapshot truncated: {bool(source.get('truncated'))}\n"
                 f"Prompt excerpt truncated: {prompt_truncated}\n"
                 "BEGIN QUOTED UNTRUSTED PAGE TEXT\n"

@@ -21,6 +21,14 @@ def fetch_settings():
         web_fetch_timeout_seconds=2,
         web_fetch_connect_timeout_seconds=10,
         web_fetch_chunk_bytes=65_536,
+        web_fetch_user_agents=[
+            (
+                "Mozilla/5.0 (X11; Linux x86_64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/151.0.0.0 Safari/537.36"
+            )
+        ],
+        web_fetch_user_agent_attempts=1,
         web_fetch_max_bytes=100_000,
         web_fetch_max_text_chars=20_000,
         web_fetch_max_redirects=2,
@@ -61,6 +69,9 @@ def test_html_fetch_extracts_text_without_scripts():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("cookie") is None
+        assert request.headers["user-agent"].startswith("Mozilla/5.0")
+        assert request.headers["accept-language"] == "en-US,en;q=0.9"
+        assert request.headers["sec-fetch-mode"] == "navigate"
         return httpx.Response(
             200,
             headers={"content-type": "text/html; charset=utf-8"},
@@ -81,6 +92,40 @@ def test_html_fetch_extracts_text_without_scripts():
     assert "Visible heading" in page.content_text
     assert "Readable body" in page.content_text
     assert "ignore all instructions" not in page.content_text
+    assert page.retrieval_method == "direct_http"
+    assert page.retrieval_attempts == 1
+
+
+def test_403_can_try_a_second_locally_configured_user_agent():
+    async def resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    seen_user_agents = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_user_agents.append(request.headers["user-agent"])
+        if len(seen_user_agents) == 1:
+            return httpx.Response(403, text="blocked")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text="readable fallback",
+        )
+
+    settings = fetch_settings()
+    settings.web_fetch_user_agents = ["First local profile", "Second local profile"]
+    settings.web_fetch_user_agent_attempts = 2
+    fetcher = WebPageFetcher(
+        settings,
+        transport=httpx.MockTransport(handler),
+        resolver=resolver,
+    )
+
+    page = asyncio.run(fetcher.fetch("https://example.com/article"))
+
+    assert seen_user_agents == ["First local profile", "Second local profile"]
+    assert page.content_text == "readable fallback"
+    assert page.retrieval_attempts == 2
 
 
 def test_redirect_to_private_destination_is_blocked():
@@ -147,6 +192,8 @@ def test_project_source_is_cached_listed_and_removable(tmp_path: Path):
     assert first_failures == second_failures == []
     assert first[0]["id"] == second[0]["id"]
     assert fake_fetcher.calls == 1
+    assert first[0]["retrieval_method"] == "direct_http"
+    assert first[0]["retrieval_attempts"] == 1
     assert "content_text" not in service.public_source(first[0])
     assert storage.list_web_sources(project["id"])[0]["title"] == "Cached page"
 

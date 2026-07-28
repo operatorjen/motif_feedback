@@ -13,6 +13,8 @@ providers:
     supports_temperature: true
     supports_tools: true
     reasoning_effort: null
+    web_search_mode: none
+    web_search_context_size: medium
 
   - id: gemini
     label: Google / Gemini
@@ -26,6 +28,8 @@ providers:
     supports_temperature: true
     supports_tools: true
     reasoning_effort: null
+    web_search_mode: none
+    web_search_context_size: medium
 
   - id: deepseek
     label: DeepSeek
@@ -39,6 +43,8 @@ providers:
     supports_temperature: true
     supports_tools: true
     reasoning_effort: null
+    web_search_mode: none
+    web_search_context_size: medium
 
   - id: openai
     label: OpenAI / ChatGPT
@@ -52,6 +58,8 @@ providers:
     supports_temperature: false
     supports_tools: true
     reasoning_effort: none
+    web_search_mode: responses
+    web_search_context_size: medium
 
   # Enable and adjust this profile for an OpenAI-compatible local server.
   - id: local
@@ -65,3 +73,5 @@ providers:
     supports_temperature: true
     supports_tools: true
     reasoning_effort: null
+    web_search_mode: none
+    web_search_context_size: medium

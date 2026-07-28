@@ -116,6 +116,57 @@ def test_empty_response_after_tools_gets_a_synthesis_retry():
         assert all(str(message.get("content", "")).strip() for message in assistant_messages)
 
 
+def test_openai_search_fallback_uses_responses_web_search():
+    settings = provider_settings()
+    client = DirectProviderClient(settings, FakeToolExecutor())
+    sent_payloads = []
+
+    async def fake_post(_provider, payload, _key):
+        sent_payloads.append(payload)
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Search-grounded answer.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "url": "https://example.com/source",
+                                    "title": "Source",
+                                    "start_index": 0,
+                                    "end_index": 22,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+    client._post_response = fake_post
+    completion = asyncio.run(
+        client.run_agent(
+            provider="openai",
+            model="gpt-5.2",
+            messages=[{"role": "user", "content": "Search for this URL."}],
+            tools=[],
+            tool_context=ToolContext("agent_a", "general"),
+            temperature=0.5,
+            max_tokens=500,
+            enable_web_search=True,
+        )
+    )
+
+    assert sent_payloads[0]["tools"] == [
+        {"type": "web_search", "search_context_size": "medium"}
+    ]
+    assert sent_payloads[0]["max_output_tokens"] == 500
+    assert completion.annotations[0]["url_citation"]["title"] == "Source"
+
+
 def test_public_search_results_do_not_persist_snippets():
     public = DirectProviderClient._public_tool_result(
         "search_project_files",
