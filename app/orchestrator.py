@@ -161,6 +161,7 @@ class Orchestrator:
             "user",
             request.message,
             metadata={
+                "turn_id": request.turn_id,
                 "web_sources": public_sources,
                 "web_source_failures": source_failures,
                 "search_fallback_agent": search_fallback_agent,
@@ -192,6 +193,12 @@ class Orchestrator:
         turn_transcript: list[dict] = []
         agent_failures: list[dict] = []
         shared_context = self.persona_store.load_shared_context()
+        project_context = yaml.safe_dump(
+            project,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+        source_context = self._format_web_sources(web_sources)
 
         for agent_id in order:
             turn_status = await self._run_agent_turn(
@@ -199,8 +206,10 @@ class Orchestrator:
                 request=request,
                 runtime=runtime,
                 project=project,
+                project_context=project_context,
                 shared_context=shared_context,
                 web_sources=web_sources,
+                source_context=source_context,
                 role_signals=role_signals,
                 decision=decision,
                 source_failures=source_failures,
@@ -282,8 +291,10 @@ class Orchestrator:
         request: ChatRequest,
         runtime: RuntimeConfig,
         project: dict,
+        project_context: str,
         shared_context: str,
         web_sources: list[dict],
+        source_context: str,
         role_signals: list[dict],
         decision: SearchDecision,
         source_failures: list[dict],
@@ -337,6 +348,7 @@ class Orchestrator:
         system_prompt = self._build_system_prompt(
             persona=persona,
             project=project,
+            project_context=project_context,
             shared_context=shared_context,
             is_first=not visible_responses,
             memory_loop=memory_loop_for(agent_id),
@@ -354,6 +366,7 @@ class Orchestrator:
             system_prompt,
             recent + turn_transcript,
             web_sources,
+            source_context=source_context,
         )
         tools = list(USER_TOOL_DEFINITIONS)
         try:
@@ -448,12 +461,15 @@ class Orchestrator:
         system_prompt: str,
         transcript_messages: list[dict],
         web_sources: list[dict],
+        *,
+        source_context: str | None = None,
     ) -> list[dict]:
         transcript = self._format_transcript(
             transcript_messages,
             self.settings.user_display_name,
         )
-        source_context = self._format_web_sources(web_sources)
+        if source_context is None:
+            source_context = self._format_web_sources(web_sources)
         return [
             {"role": "system", "content": system_prompt},
             {
@@ -525,6 +541,7 @@ class Orchestrator:
     ) -> dict:
         content = completion.content.strip()
         metadata = {
+            "turn_id": request.turn_id,
             "research_enabled": research_enabled,
             "tool_events": completion.tool_events,
             "user_message_id": user_message_id,
@@ -532,6 +549,8 @@ class Orchestrator:
             "web_sources": public_sources,
             "turn_beat": turn_beat,
         }
+        if completion.usage:
+            metadata["provider_usage"] = completion.usage
         if research_provenance is not None:
             metadata["research_provenance"] = research_provenance
         stored = self.storage.add_message(
@@ -1110,6 +1129,7 @@ class Orchestrator:
         *,
         persona: dict,
         project: dict,
+        project_context: str | None = None,
         shared_context: str,
         is_first: bool,
         memory_loop: dict,
@@ -1221,7 +1241,7 @@ IDENTITY CONTRACT
   supported changes remain dormant and do not alter your active persona.
 
 CURRENT PROJECT
-{yaml.safe_dump(project, sort_keys=False, allow_unicode=True)}
+{project_context or yaml.safe_dump(project, sort_keys=False, allow_unicode=True)}
 
 YOUR PRIVATE PERSISTENT MEMORY LOOP
 This loop is yours alone; other agents do not receive these records. {user_name} can inspect the

@@ -436,9 +436,9 @@ class WebSourceService:
         message: str,
         progress_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[list[dict], list[dict]]:
-        sources: list[dict] = []
-        failures: list[dict] = []
-        for url in extract_prompt_urls(message, self.settings.web_fetch_max_urls):
+        urls = extract_prompt_urls(message, self.settings.web_fetch_max_urls)
+
+        async def collect_one(url: str) -> tuple[dict | None, dict | None]:
             await self._emit(progress_callback, {"type": "source_fetch_start", "url": url})
             try:
                 normalized = normalize_public_url(url)
@@ -468,7 +468,7 @@ class WebSourceService:
                         progress_callback,
                         {"type": "source_fetch_complete", **self.public_source(source)},
                     )
-                sources.append(source)
+                return source, None
             except WebSourceError as exc:
                 failure = {
                     "url": url,
@@ -479,8 +479,12 @@ class WebSourceService:
                     failure["attempt_count"] = exc.attempt_count
                     if exc.status_code is not None:
                         failure["status_code"] = exc.status_code
-                failures.append(failure)
                 await self._emit(progress_callback, {"type": "source_fetch_error", **failure})
+                return None, failure
+
+        collected = await asyncio.gather(*(collect_one(url) for url in urls))
+        sources = [source for source, _failure in collected if source is not None]
+        failures = [failure for _source, failure in collected if failure is not None]
         return sources, failures
 
     def _cache_is_fresh(self, fetched_at: str) -> bool:

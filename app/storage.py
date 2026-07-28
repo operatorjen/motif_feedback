@@ -37,6 +37,10 @@ class StorageError(ValueError):
     pass
 
 
+class ChatTurnConflictError(StorageError):
+    pass
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -173,11 +177,37 @@ class Storage:
                 CREATE INDEX IF NOT EXISTS idx_web_sources_project_requested
                 ON web_sources(project_id, requested_url, fetched_at DESC);
 
+                CREATE TABLE IF NOT EXISTS chat_turns (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('running', 'completed', 'failed', 'interrupted')
+                    ),
+                    result_json TEXT,
+                    trace_json TEXT NOT NULL DEFAULT '{}',
+                    failure_detail TEXT,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_turns_project_started
+                ON chat_turns(project_id, started_at DESC);
+
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL
                 );
                 """
+            )
+            connection.execute(
+                """
+                UPDATE chat_turns
+                SET status = 'interrupted', updated_at = ?
+                WHERE status = 'running'
+                """,
+                (utc_now(),),
             )
             ownership_columns = {
                 row["name"]
@@ -481,6 +511,148 @@ class Storage:
         head_length = max(1, int((max_chars - 3) * 0.7))
         tail_length = max_chars - head_length - 3
         return f"{compact[:head_length]}...{compact[-tail_length:]}"
+
+    def begin_chat_turn(
+        self,
+        turn_id: str,
+        project_id: str,
+        request_fingerprint: str,
+    ) -> dict:
+        """Create one durable turn record or return the matching existing record."""
+        timestamp = utc_now()
+        with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
+            row = connection.execute(
+                """
+                SELECT id, project_id, request_fingerprint, status, result_json,
+                       trace_json, failure_detail, started_at, updated_at
+                FROM chat_turns WHERE id = ?
+                """,
+                (turn_id,),
+            ).fetchone()
+            if row is not None:
+                existing = self._row_to_chat_turn(row)
+                if (
+                    existing["project_id"] != project_id
+                    or existing["request_fingerprint"] != request_fingerprint
+                ):
+                    raise ChatTurnConflictError(
+                        "That turn identifier is already attached to a different request."
+                    )
+                existing["created"] = False
+                return existing
+            connection.execute(
+                """
+                INSERT INTO chat_turns(
+                    id, project_id, request_fingerprint, status, result_json,
+                    trace_json, failure_detail, started_at, updated_at
+                ) VALUES (?, ?, ?, 'running', NULL, '{}', NULL, ?, ?)
+                """,
+                (turn_id, project_id, request_fingerprint, timestamp, timestamp),
+            )
+        return {
+            "id": turn_id,
+            "project_id": project_id,
+            "request_fingerprint": request_fingerprint,
+            "status": "running",
+            "result": None,
+            "trace": {},
+            "failure_detail": None,
+            "started_at": timestamp,
+            "updated_at": timestamp,
+            "created": True,
+        }
+
+    def complete_chat_turn(
+        self,
+        turn_id: str,
+        result: dict,
+        trace: dict,
+    ) -> dict:
+        return self._finish_chat_turn(
+            turn_id,
+            status="completed",
+            result=result,
+            trace=trace,
+            failure_detail=None,
+        )
+
+    def fail_chat_turn(
+        self,
+        turn_id: str,
+        *,
+        status: str,
+        detail: str,
+        trace: dict,
+    ) -> dict:
+        if status not in {"failed", "interrupted"}:
+            raise StorageError("Invalid failed chat-turn status.")
+        return self._finish_chat_turn(
+            turn_id,
+            status=status,
+            result=None,
+            trace=trace,
+            failure_detail=" ".join(str(detail).split())[:4_000],
+        )
+
+    def _finish_chat_turn(
+        self,
+        turn_id: str,
+        *,
+        status: str,
+        result: dict | None,
+        trace: dict,
+        failure_detail: str | None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self._write_lock, self.connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE chat_turns
+                SET status = ?, result_json = ?, trace_json = ?,
+                    failure_detail = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    json.dumps(trace, ensure_ascii=False),
+                    failure_detail,
+                    timestamp,
+                    turn_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise StorageError("Chat turn not found.")
+        return self.get_chat_turn(turn_id)
+
+    def get_chat_turn(self, turn_id: str) -> dict:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, project_id, request_fingerprint, status, result_json,
+                       trace_json, failure_detail, started_at, updated_at
+                FROM chat_turns WHERE id = ?
+                """,
+                (turn_id,),
+            ).fetchone()
+        if row is None:
+            raise StorageError("Chat turn not found.")
+        return self._row_to_chat_turn(row)
+
+    @staticmethod
+    def _row_to_chat_turn(row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "project_id": row["project_id"],
+            "request_fingerprint": row["request_fingerprint"],
+            "status": row["status"],
+            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "trace": json.loads(row["trace_json"] or "{}"),
+            "failure_detail": row["failure_detail"],
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def get_file_owner(self, project_id: str, path: str) -> dict | None:
         self.get_project(project_id)

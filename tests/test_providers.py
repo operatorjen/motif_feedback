@@ -116,6 +116,67 @@ def test_empty_response_after_tools_gets_a_synthesis_retry():
         assert all(str(message.get("content", "")).strip() for message in assistant_messages)
 
 
+def test_provider_usage_is_accumulated_across_tool_rounds():
+    settings = provider_settings()
+    client = DirectProviderClient(settings, FakeToolExecutor())
+    responses = iter(
+        [
+            {
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "function": {
+                                        "name": "read_project_file",
+                                        "arguments": '{"path":"post.md"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+            },
+            {
+                "usage": {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24},
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Finished.",
+                            "tool_calls": [],
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+
+    async def fake_post(_provider, _payload, _key):
+        return next(responses)
+
+    client._post_chat = fake_post
+    completion = asyncio.run(
+        client.run_agent(
+            provider="moonshot",
+            model="provider/model",
+            messages=[{"role": "user", "content": "Read the post."}],
+            tools=[{"type": "function"}],
+            tool_context=ToolContext("agent_a", "general"),
+            temperature=0.5,
+            max_tokens=500,
+        )
+    )
+
+    assert completion.usage == {
+        "prompt_tokens": 30,
+        "completion_tokens": 6,
+        "total_tokens": 36,
+    }
+
+
 def test_openai_search_fallback_uses_responses_web_search():
     settings = provider_settings()
     client = DirectProviderClient(settings, FakeToolExecutor())

@@ -51,7 +51,9 @@ The chat composer remains available while a room turn is running. Additional sub
 a bounded, first-in-first-out browser queue and begin one at a time after the active turn
 finishes. Each queued prompt retains the project, selected participants, and research mode from
 the moment it was submitted. Waiting prompts can be removed before they start. The queue lives
-only in the current browser tab and is not persisted across a reload.
+only in the current browser tab and is not persisted across a reload. Once a queued prompt
+starts, the server records its unique turn identifier and lifecycle. Repeating an already
+completed identifier returns the stored result rather than running the agents twice.
 
 ## Quick start
 
@@ -144,7 +146,9 @@ projects, run a shell, install packages, or control Docker.
 Public HTTP(S) URLs pasted into a prompt can be fetched through a bounded read-only page reader
 and stored under the current project. An optional ordered `WEB_FETCH_USER_AGENTS` JSON list lives
 only in the ignored local `.env`; `WEB_FETCH_USER_AGENT_ATTEMPTS` chooses whether the reader uses
-one or, at most, two profiles. No URLs or domains are configured or hardcoded.
+one or, at most, two profiles. Up to three independent supplied URLs are retrieved concurrently,
+while their stored and prompt order remains the order in which the user supplied them. No URLs
+or domains are configured or hardcoded.
 
 When all configured direct attempts return HTTP 403, research modes other than **OFF** can route
 the exact failed URL to one selected agent whose provider declares compatible native search.
@@ -179,10 +183,12 @@ workspace/
 ```
 
 This includes the SQLite database, runtime configuration, provider catalog, personas, shared
-context, persona history and dormant identity-change records, projects, files, and supplied-page
-snapshots. Seeded personas, shared context, and the provider catalog are copied from `app/seed/`
-on first startup. The runtime configuration is created only after you save provider and model
-selections in **SETUP**. Afterward, all workspace state is persistent.
+context, persona history and dormant identity-change records, projects, files, supplied-page
+snapshots, and started-turn lifecycle records. Completed turns retain a bounded internal timing
+trace and provider-reported token counts when available; generated bodies and source contents are
+not copied into the trace. Seeded personas, shared context, and the provider catalog are copied
+from `app/seed/` on first startup. The runtime configuration is created only after you save
+provider and model selections in **SETUP**. Afterward, all workspace state is persistent.
 
 Back up `workspace/` to preserve the complete local state. Keep `.env` separate because it may
 contain provider secrets.

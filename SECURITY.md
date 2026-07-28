@@ -116,9 +116,18 @@ microVM when code may be hostile or stronger isolation is required.
   and stored public tool-event metadata omits generated file, source, YAML, and Markdown bodies.
 - When a streaming browser response closes before a room turn completes, the unfinished
   provider task is canceled and awaited so it does not continue as detached background work.
+  The started turn is marked interrupted; any agent messages committed before interruption
+  remain part of the conversation rather than being rolled back.
 - Prompts submitted during an active room turn wait in a bounded in-memory browser queue. They are
   sent to the server sequentially and are not written to browser storage. Reloading or closing the
   tab discards prompts that have not started.
+- A prompt receives a unique turn identifier when it enters the browser queue. Once that prompt
+  starts, its request fingerprint, lifecycle, completed result, bounded progress timings, provider
+  and model labels, URLs involved in retrieval, and provider-reported token counts may be retained
+  in SQLite. Reusing a completed identifier replays its stored result; reusing the identifier for
+  different content is rejected. Trace records omit prompt text, response bodies, tool arguments,
+  file contents, and source text, although the completed result duplicates messages already stored
+  in the conversation.
 
 ## What this does not protect against
 

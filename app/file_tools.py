@@ -429,13 +429,12 @@ class ProjectFileTools:
         if not terms:
             terms = [clean_query.lower()]
 
+        result_limit = min(
+            max(max_results, 1),
+            PROJECT_FILE_SEARCH_MAX_RESULTS,
+        )
         results: list[dict] = []
         for file_info in self.list_files(project_id):
-            if len(results) >= min(
-                max(max_results, 1),
-                PROJECT_FILE_SEARCH_MAX_RESULTS,
-            ):
-                break
             path = file_info["path"]
             try:
                 data = self.read_file(
@@ -463,4 +462,4 @@ class ProjectFileTools:
             results.append({"path": path, "score": score, "snippet": snippet})
 
         results.sort(key=lambda item: (-item["score"], item["path"]))
-        return results
+        return results[:result_limit]

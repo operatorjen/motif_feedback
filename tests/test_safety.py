@@ -215,6 +215,59 @@ def test_message_limit_returns_the_newest_messages_in_chat_order(tmp_path: Path)
     assert [message["content"] for message in messages] == ["run-2", "run-3", "run-4"]
 
 
+def test_chat_turns_are_idempotent_and_mark_stale_runs_interrupted(tmp_path: Path):
+    settings, storage, _, _ = make_services(tmp_path)
+    project = storage.create_project("Durable turns")
+
+    started = storage.begin_chat_turn("turn-12345", project["id"], "fingerprint")
+    duplicate = storage.begin_chat_turn("turn-12345", project["id"], "fingerprint")
+
+    assert started["created"] is True
+    assert duplicate["created"] is False
+    assert duplicate["status"] == "running"
+
+    result = {"messages": [{"id": "message-1"}], "research": {"needs_search": False}}
+    storage.complete_chat_turn(
+        "turn-12345",
+        result,
+        {"duration_ms": 12.5, "events": [{"type": "turn_complete"}]},
+    )
+    replay = storage.begin_chat_turn("turn-12345", project["id"], "fingerprint")
+
+    assert replay["status"] == "completed"
+    assert replay["result"] == result
+    assert replay["trace"]["duration_ms"] == 12.5
+
+    storage.begin_chat_turn("turn-67890", project["id"], "another-fingerprint")
+    reloaded = Storage(settings.database_path, settings.projects_root)
+    reloaded.initialize()
+
+    assert reloaded.get_chat_turn("turn-67890")["status"] == "interrupted"
+
+
+def test_project_file_search_returns_the_best_matches_not_the_first_matches(tmp_path: Path):
+    _, storage, _, tools = make_services(tmp_path)
+    project = storage.create_project("Ranked search")
+    tools.write_file(
+        project["id"],
+        "a-low.md",
+        "motif appears once",
+        actor_type="user",
+    )
+    tools.write_file(
+        project["id"],
+        "z-high.md",
+        "motif motif motif motif",
+        actor_type="user",
+    )
+
+    results = tools.search_files(project["id"], "motif", max_results=1)
+
+    assert [(result["path"], result["score"]) for result in results] == [
+        ("z-high.md", 4)
+    ]
+
+
 def test_project_files_cannot_escape_workspace(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Safety")

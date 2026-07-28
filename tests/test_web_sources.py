@@ -175,6 +175,51 @@ class FakeFetcher:
         )
 
 
+class ConcurrentFetcher:
+    def __init__(self):
+        self.active = 0
+        self.peak = 0
+
+    async def fetch(self, url: str) -> FetchedPage:
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        await asyncio.sleep(0.01)
+        self.active -= 1
+        return FetchedPage(
+            requested_url=url,
+            final_url=url,
+            title=url.rsplit("/", 1)[-1],
+            content_text=f"content for {url}",
+            content_type="text/plain",
+            byte_count=10,
+            truncated=False,
+            content_sha256=url,
+        )
+
+
+def test_independent_prompt_urls_are_collected_concurrently_in_prompt_order(tmp_path: Path):
+    storage = Storage(tmp_path / "state" / "motif.db", tmp_path / "projects")
+    storage.initialize()
+    project = storage.create_project("Parallel sources")
+    fetcher = ConcurrentFetcher()
+    service = WebSourceService(fetch_settings(), storage, fetcher)
+
+    sources, failures = asyncio.run(
+        service.collect_for_prompt(
+            project["id"],
+            "Read https://example.com/one https://example.com/two https://example.com/three",
+        )
+    )
+
+    assert failures == []
+    assert fetcher.peak == 3
+    assert [source["requested_url"] for source in sources] == [
+        "https://example.com/one",
+        "https://example.com/two",
+        "https://example.com/three",
+    ]
+
+
 def test_project_source_is_cached_listed_and_removable(tmp_path: Path):
     storage = Storage(tmp_path / "state" / "motif.db", tmp_path / "projects")
     storage.initialize()

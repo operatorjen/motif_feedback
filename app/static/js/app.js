@@ -1295,6 +1295,7 @@ async function executeQueuedPrompt(turn) {
     const result = await streamApi("/api/chat/stream", {
       method: "POST",
       body: JSON.stringify({
+        turn_id: turn.turnId,
         project_id: turn.projectId,
         message: turn.message,
         participants: turn.participants,
@@ -1373,7 +1374,10 @@ elements.composer.addEventListener("submit", (event) => {
   }
 
   try {
+    const turnId = window.crypto?.randomUUID?.()
+      || `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     state.promptQueue.enqueue({
+      turnId,
       projectId: project.id,
       projectName: project.name,
       message,

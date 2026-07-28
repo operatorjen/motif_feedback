@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -37,6 +37,7 @@ class AgentCompletion:
     tool_events: list[dict]
     locally_generated: bool = False
     continue_turn: bool = False
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 class DirectProviderClient:
@@ -117,6 +118,7 @@ class DirectProviderClient:
         available_tools = tools if options["supports_tools"] else []
         participation_retries = 0
         total_tool_calls = 0
+        usage_totals: dict[str, int] = {}
         participation_retry_limit = self.settings.provider_participation_retries
         for round_index in range(self.settings.max_tool_rounds + 1):
             if progress_callback is not None:
@@ -130,6 +132,7 @@ class DirectProviderClient:
                 max_tokens=max_tokens,
             )
             response_data = await self._post_chat(provider, payload, key)
+            self._accumulate_usage(usage_totals, response_data.get("usage"))
             message, tool_calls = self._response_message(response_data, label)
             response_tool_limit = self.settings.provider_tool_calls_per_response
             turn_tool_limit = self.settings.provider_tool_calls_per_turn
@@ -156,6 +159,7 @@ class DirectProviderClient:
                     progress_callback=progress_callback,
                 )
                 if completion is not None:
+                    completion.usage = usage_totals
                     return completion
                 continue
 
@@ -267,7 +271,30 @@ class DirectProviderClient:
             annotations=annotations,
             raw_message=response_data,
             tool_events=[],
+            usage=self._normalize_usage(response_data.get("usage")),
         )
+
+    @staticmethod
+    def _normalize_usage(raw_usage: Any) -> dict[str, int]:
+        if not isinstance(raw_usage, dict):
+            return {}
+        usage: dict[str, int] = {}
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        ):
+            value = raw_usage.get(key)
+            if isinstance(value, int) and value >= 0:
+                usage[key] = value
+        return usage
+
+    @classmethod
+    def _accumulate_usage(cls, totals: dict[str, int], raw_usage: Any) -> None:
+        for key, value in cls._normalize_usage(raw_usage).items():
+            totals[key] = totals.get(key, 0) + value
 
     @staticmethod
     def _normalize_search_annotations(raw_annotations: Any) -> list[dict]:

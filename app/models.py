@@ -166,6 +166,12 @@ class CodeRunInput(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    turn_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9-]+$",
+    )
     project_id: str
     message: str = Field(min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS)
     participants: list[str] = Field(default_factory=lambda: list(AGENT_IDS))

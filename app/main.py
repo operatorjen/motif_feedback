@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -51,7 +54,7 @@ from .run_coordinator import CodeRunCoordinator, CodeRunValidationError
 from .run_sessions import CodeRunSession
 from .search_router import SearchRouter
 from .security import LocalSecurityMiddleware, LocalSessionGuard
-from .storage import Storage, StorageError
+from .storage import ChatTurnConflictError, Storage, StorageError
 from .web_sources import WebSourceService
 
 settings = get_settings()
@@ -128,6 +131,123 @@ app.add_middleware(LocalSecurityMiddleware, guard=guard)
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+
+
+class ChatTurnStateError(RuntimeError):
+    pass
+
+
+def _chat_request_fingerprint(payload: ChatRequest) -> str:
+    encoded = json.dumps(
+        payload.model_dump(exclude={"turn_id"}),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _room_result_payload(result) -> dict:
+    return {
+        "messages": result.messages,
+        "research": result.research,
+        "agent_failures": result.agent_failures,
+        "web_sources": result.web_sources,
+        "source_failures": result.source_failures,
+    }
+
+
+def _trace_event(event: dict, started: float) -> dict:
+    trace = {
+        "type": str(event.get("type") or "progress"),
+        "elapsed_ms": round((time.monotonic() - started) * 1_000, 3),
+    }
+    for key in (
+        "agent_id",
+        "provider",
+        "model",
+        "round",
+        "turn_beat",
+        "url",
+        "status_code",
+        "attempt_count",
+        "retrieval_method",
+        "tool",
+        "message_id",
+    ):
+        value = event.get(key)
+        if value is not None and isinstance(value, (str, int, float, bool)):
+            trace[key] = value
+    message = event.get("message")
+    if isinstance(message, dict):
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("provider_usage"), dict):
+            trace["provider_usage"] = metadata["provider_usage"]
+    return trace
+
+
+async def _execute_chat_turn(
+    payload: ChatRequest,
+    runtime: RuntimeConfig,
+    progress_callback=None,
+) -> dict:
+    if payload.turn_id is None:
+        payload = payload.model_copy(update={"turn_id": uuid.uuid4().hex})
+    assert payload.turn_id is not None
+    started = time.monotonic()
+    trace_events: list[dict] = []
+
+    async def report(event: dict) -> None:
+        trace_events.append(_trace_event(event, started))
+        if progress_callback is not None:
+            await progress_callback(event)
+
+    try:
+        turn = storage.begin_chat_turn(
+            payload.turn_id,
+            payload.project_id,
+            _chat_request_fingerprint(payload),
+        )
+    except ChatTurnConflictError as exc:
+        raise ChatTurnStateError(str(exc)) from exc
+    if not turn["created"]:
+        if turn["status"] == "completed" and isinstance(turn["result"], dict):
+            return turn["result"]
+        raise ChatTurnStateError(
+            "That room turn did not complete previously. Submit it again as a new prompt."
+        )
+
+    try:
+        result = await orchestrator.chat(payload, runtime, progress_callback=report)
+        public_result = _room_result_payload(result)
+        trace = {
+            "duration_ms": round((time.monotonic() - started) * 1_000, 3),
+            "events": trace_events,
+        }
+        storage.complete_chat_turn(payload.turn_id, public_result, trace)
+        return public_result
+    except asyncio.CancelledError:
+        storage.fail_chat_turn(
+            payload.turn_id,
+            status="interrupted",
+            detail="The streaming client disconnected before the room turn completed.",
+            trace={
+                "duration_ms": round((time.monotonic() - started) * 1_000, 3),
+                "events": trace_events,
+            },
+        )
+        raise
+    except Exception as exc:
+        storage.fail_chat_turn(
+            payload.turn_id,
+            status="failed",
+            detail=str(exc),
+            trace={
+                "duration_ms": round((time.monotonic() - started) * 1_000, 3),
+                "events": trace_events,
+            },
+        )
+        raise
 
 
 @app.get("/healthz")
@@ -280,14 +400,9 @@ async def chat(payload: ChatRequest, request: Request) -> dict:
     runtime = _require_runtime_config()
     try:
         async with request.app.state.chat_lock:
-            result = await orchestrator.chat(payload, runtime)
-        return {
-            "messages": result.messages,
-            "research": result.research,
-            "agent_failures": result.agent_failures,
-            "web_sources": result.web_sources,
-            "source_failures": result.source_failures,
-        }
+            return await _execute_chat_turn(payload, runtime)
+    except ChatTurnStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except StorageError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ProviderError, PersonaUpdateError, FileToolError) as exc:
@@ -307,17 +422,14 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
         async def run_chat() -> None:
             try:
                 async with request.app.state.chat_lock:
-                    result = await orchestrator.chat(payload, runtime, progress_callback=report)
-                await queue.put(
-                    {
-                        "type": "result",
-                        "messages": result.messages,
-                        "research": result.research,
-                        "agent_failures": result.agent_failures,
-                        "web_sources": result.web_sources,
-                        "source_failures": result.source_failures,
-                    }
-                )
+                    result = await _execute_chat_turn(
+                        payload,
+                        runtime,
+                        progress_callback=report,
+                    )
+                await queue.put({"type": "result", **result})
+            except ChatTurnStateError as exc:
+                await queue.put({"type": "error", "detail": str(exc), "status": 409})
             except StorageError as exc:
                 await queue.put({"type": "error", "detail": str(exc), "status": 404})
             except (ProviderError, PersonaUpdateError, FileToolError) as exc:
