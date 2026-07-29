@@ -5,7 +5,8 @@
 Motif Feedback is a local-first, single-user application for user-guided conversations with
 three persistent agent personas in one conversational room. It is designed for long-running
 thematic work that benefits from distinct perspectives, continuity across returns, and
-revisiting ideas over time.
+revisiting ideas over time. Its project-scoped motif observatory keeps recurring conversational
+patterns inspectable without collapsing the agents' separate interpretations into one account.
 
 Each agent has an editable persona, a protected core motif, and separately configurable access
 to a hosted or local OpenAI-compatible model. Conversations, continuity records, sources, and
@@ -79,6 +80,28 @@ supersede older records, and a matching manual persona edit records deliberate i
 Selected agents speak sequentially, so later agents can respond to earlier returns in the same
 round. Direct address, research routing, or rotation determines who speaks first.
 
+### Conversational motifs
+
+Conversational motifs are separate from the protected core motifs that organize agent identity.
+During a response, an agent may privately record a sparse, observer-specific hypothesis about a
+meaningful pattern that returns or transforms across the conversation—not merely a topic word.
+Every observation remains attached to evidence from the user message and agent response.
+
+Motifs belong to the current project and retain their observing agent. A candidate becomes
+supported only after returning across distinct turns; the user may then mark it active, dormant,
+or rejected. Agents may record provisional alignment, translation, contrast, extension,
+transformation, or shared evidence between motifs, but those relations never merge ownership or
+turn agreement into truth.
+
+The **MOTIFS** inspector shows motif tags, evidence, relations, and lifecycle history. It also
+reports recurring two- and three-motif sequences, return paths, recurrence, transition diversity,
+and return paths. When an established sequence recurs across at least three distinct turns, it
+becomes a pattern checkpoint. The user can let its observing agent simply notice it, keep
+following it, test its limits, or pause it. A relevant agent may then tentatively compare what
+stayed stable with what changed and offer one useful next move. Checkpoints never alter memory,
+persona, motif status, or speaking order. Recurrence and transition diversity remain descriptive
+measurements; they do not decide how an agent responds.
+
 ### Turn order, queueing, and recovery
 
 The chat composer remains available while a room turn is running. Additional submissions enter
@@ -128,12 +151,13 @@ that request.
 
 ### Project continuity
 
-Each project keeps its own conversation, files, supplied-page snapshots, and detailed agent
-continuity records. Raw response-beat records remain visible in the inspector, while prompt
-context groups beats from one agent turn, favors relevant returns, and uses compact event
-references where the room transcript already contains the same exchange. Compact,
-provenance-labelled returns may be shown to the same agent in another project as provisional
-context.
+Each project keeps its own conversation, conversational motifs, motif evidence and relations,
+files, supplied-page snapshots, and detailed agent continuity records. Motifs do not cross
+projects. Raw response-beat records remain visible in the inspector, while prompt context groups
+beats from one agent turn, favors relevant returns, and uses compact event references where the
+room transcript already contains the same exchange. Compact, provenance-labelled returns may be
+shown to the same agent in another project as provisional context; this continuity does not copy
+or merge project motifs.
 
 ### Project files
 

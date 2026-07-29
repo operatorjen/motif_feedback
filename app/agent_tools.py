@@ -27,6 +27,7 @@ class ToolContext:
     turn_id: str | None = None
     turn_beat: int = 1
     operation_id: str | None = None
+    user_message_id: str | None = None
 
 
 USER_TOOL_DEFINITIONS = [
@@ -123,6 +124,104 @@ USER_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "record_motif_observations",
+            "description": (
+                "Privately record a sparse, observer-specific hypothesis about the conversational "
+                "motifs in this turn. Use at most once per response beat, only when a pattern is "
+                "meaningful, with exactly one primary motif and at most two secondary motifs. "
+                "Reuse a supplied motif_id for returns, even when using a new alias; do not turn "
+                "every noun or topic into a motif. A motif is a recurring organization that can "
+                "return or transform, not merely a subject. Connections to another observer's "
+                "motif are provisional relations, never automatic merges. These observations "
+                "remain inspectable and do not edit your persona memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "required": ["observations"],
+                "properties": {
+                    "observations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "label",
+                                "description",
+                                "relation",
+                                "confidence",
+                                "primary",
+                            ],
+                            "properties": {
+                                "motif_id": {"type": "string"},
+                                "label": {"type": "string", "maxLength": 96},
+                                "description": {"type": "string", "maxLength": 1200},
+                                "relation": {
+                                    "type": "string",
+                                    "enum": [
+                                        "emergence",
+                                        "return",
+                                        "extension",
+                                        "bridge",
+                                        "contrast",
+                                        "transformation",
+                                    ],
+                                },
+                                "confidence": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1,
+                                },
+                                "primary": {"type": "boolean"},
+                                "connections": {
+                                    "type": "array",
+                                    "maxItems": 4,
+                                    "items": {
+                                        "type": "object",
+                                        "required": [
+                                            "motif_id",
+                                            "relation",
+                                            "confidence",
+                                            "description",
+                                        ],
+                                        "properties": {
+                                            "motif_id": {"type": "string"},
+                                            "relation": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "possible_alignment",
+                                                    "translation",
+                                                    "contrast",
+                                                    "extension",
+                                                    "transformation",
+                                                    "shared_evidence",
+                                                ],
+                                            },
+                                            "confidence": {
+                                                "type": "number",
+                                                "minimum": 0,
+                                                "maximum": 1,
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "maxLength": 600,
+                                            },
+                                        },
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_persona_update",
             "description": (
                 "Save a justified update to your own permitted adaptive persona fields. Some "
@@ -194,20 +293,24 @@ class AgentToolExecutor:
                 ).exists()
             except (FileToolError, StorageError, ValueError):
                 existed_before = False
+        if name == "write_project_file":
+            public_arguments = {
+                "path": arguments.get("path"),
+                "bytes": len(str(arguments.get("content") or "").encode("utf-8")),
+                "content_sha256": sha256(
+                    str(arguments.get("content") or "").encode("utf-8")
+                ).hexdigest(),
+                "existed_before": existed_before,
+            }
+        elif name == "record_motif_observations":
+            public_arguments = {
+                "observation_count": len(arguments.get("observations") or []),
+            }
+        else:
+            public_arguments = {"change_count": len(arguments.get("changes") or [])}
         payload = {
             "tool": name,
-            "arguments": (
-                {
-                    "path": arguments.get("path"),
-                    "bytes": len(str(arguments.get("content") or "").encode("utf-8")),
-                    "content_sha256": sha256(
-                        str(arguments.get("content") or "").encode("utf-8")
-                    ).hexdigest(),
-                    "existed_before": existed_before,
-                }
-                if name == "write_project_file"
-                else {"change_count": len(arguments.get("changes") or [])}
-            ),
+            "arguments": public_arguments,
         }
         operation = storage.begin_turn_operation(
             operation_id=context.operation_id,
@@ -248,6 +351,10 @@ class AgentToolExecutor:
                     "Inspect the persona and proposals before submitting it again."
                 ),
             }
+        if recovery_strategy == "read_motif_batch":
+            if not context.operation_id:
+                return None
+            return self.file_tools.storage.get_motif_batch_result(context.operation_id)
         if recovery_strategy != "verify_content_hash":
             return None
         try:
@@ -325,6 +432,18 @@ class AgentToolExecutor:
                     arguments["content"],
                     actor_type="agent",
                     actor_id=context.agent_id,
+                )
+            if name == "record_motif_observations":
+                if not context.turn_id or not context.operation_id:
+                    raise StorageError("Motif observations require an active durable turn.")
+                return self.file_tools.storage.record_motif_observations(
+                    project_id=context.project_id,
+                    observer_agent_id=context.agent_id,
+                    turn_id=context.turn_id,
+                    turn_beat=context.turn_beat,
+                    operation_id=context.operation_id,
+                    user_message_id=context.user_message_id,
+                    observations=arguments["observations"],
                 )
             if name == "propose_persona_update":
                 payload = PersonaUpdate.model_validate(

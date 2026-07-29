@@ -11,6 +11,7 @@ from .storage_files import FileOwnershipRepositoryMixin
 from .storage_memory import MemoryRepositoryMixin
 from .storage_messages import MessageRepositoryMixin
 from .storage_migrations import StorageMigrationMixin
+from .storage_motifs import MotifRepositoryMixin
 from .storage_projects import ProjectRepositoryMixin
 from .storage_schema import StorageSchemaMixin
 from .storage_turns import TurnRepositoryMixin
@@ -31,6 +32,7 @@ class Storage(
     TurnRepositoryMixin,
     FileOwnershipRepositoryMixin,
     MemoryRepositoryMixin,
+    MotifRepositoryMixin,
     WebSourceRepositoryMixin,
     ProjectRepositoryMixin,
     MessageRepositoryMixin,

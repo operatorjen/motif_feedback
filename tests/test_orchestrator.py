@@ -713,6 +713,16 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
         search_fallback_agent=None,
         role_signals=[],
         agent_id="agent_a",
+        pattern_checkpoints=[
+            {
+                "id": "checkpoint",
+                "kind": "return_path",
+                "labels": ["Threshold", "Negotiation", "Threshold"],
+                "distinct_turn_count": 4,
+                "occurrence_count": 3,
+                "preference": "test",
+            }
+        ],
     )
     assert "Reality becomes available through recurring patterns" in prompt
     assert "situated perception" in prompt
@@ -720,6 +730,10 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
     assert "YOUR PRIVATE PERSISTENT MEMORY LOOP" in prompt
     assert "propose_persona_update" in prompt
     assert "Do not recap or restate prior replies" in prompt
+    assert "YOUR RECURRING PATTERN CHECKPOINTS" in prompt
+    assert "Threshold" in prompt
+    assert "user_preference: test" in prompt
+    assert "detected from explicit motif recurrence" in prompt
     assert "SHARED UNIT CONFIGURATION" not in prompt
     assert "PRIVATE REFLECTION / UPDATE CONTRACT" not in prompt
     assert not (seed_root / "shared" / "unit.yaml").exists()

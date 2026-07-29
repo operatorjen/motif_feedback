@@ -192,6 +192,15 @@ class SharedContextEdit(BaseModel):
     markdown_text: str = Field(min_length=1, max_length=SHARED_CONTEXT_MAX_CHARS)
 
 
+class MotifStatusUpdate(BaseModel):
+    status: Literal["active", "dormant", "rejected"]
+
+
+class MotifPatternPreferenceUpdate(BaseModel):
+    observer_agent_id: Literal["agent_a", "agent_b", "agent_c"]
+    preference: Literal["notice", "follow", "test", "paused"]
+
+
 class ProviderCatalogEdit(BaseModel):
     yaml_text: str = Field(
         min_length=1,

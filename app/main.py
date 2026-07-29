@@ -19,9 +19,11 @@ from .code_runner import CodeRunnerClient, CodeRunnerError
 from .config import RuntimeNotConfiguredError, get_settings
 from .constants import (
     DEFAULT_MEMORY_EVENT_LIMIT,
+    DEFAULT_MOTIF_LIMIT,
     DEFAULT_PROJECT_MESSAGE_LIMIT,
     DEFAULT_WEB_SOURCE_LIMIT,
     MAX_MEMORY_EVENT_LIMIT,
+    MAX_MOTIF_LIMIT,
     MAX_PROJECT_MESSAGE_LIMIT,
     MAX_WEB_SOURCE_LIMIT,
 )
@@ -30,10 +32,13 @@ from .execution_semantics import public_execution_stage
 from .file_tools import FileToolError, ProjectFileTools
 from .memory_loops import memory_loop_for
 from .models import (
+    AGENT_IDS,
     ChatRequest,
     CodeRunInput,
     CodeRunRequest,
     FileSharingUpdate,
+    MotifPatternPreferenceUpdate,
+    MotifStatusUpdate,
     PersonaEdit,
     ProjectCreate,
     ProviderCatalogEdit,
@@ -42,6 +47,7 @@ from .models import (
     SetupUpdate,
     SharedContextEdit,
 )
+from .motif_checkpoints import project_motif_analysis
 from .orchestrator import Orchestrator
 from .persona_store import PersonaStore, PersonaUpdateError
 from .provider_catalog import (
@@ -571,6 +577,84 @@ def memory_loop_data(
         }
     except (KeyError, StorageError) as exc:
         raise HTTPException(status_code=404, detail="Memory loop or project not found.") from exc
+
+
+@app.get("/api/motifs/{project_id}")
+def motifs(
+    project_id: str,
+    limit: int = Query(
+        default=DEFAULT_MOTIF_LIMIT,
+        ge=1,
+        le=MAX_MOTIF_LIMIT,
+    ),
+) -> dict:
+    try:
+        items = storage.list_motifs(project_id, limit=limit)
+        analysis = project_motif_analysis(storage, project_id, AGENT_IDS)
+        return {
+            "project_id": project_id,
+            "motifs": items,
+            **analysis,
+        }
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/motifs/{project_id}/{motif_id}")
+def motif_detail(project_id: str, motif_id: str) -> dict:
+    try:
+        return storage.get_motif_detail(project_id, motif_id)
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/motifs/{project_id}/{motif_id}/status")
+def update_motif_status(
+    project_id: str,
+    motif_id: str,
+    payload: MotifStatusUpdate,
+) -> dict:
+    try:
+        return storage.set_motif_status(
+            project_id,
+            motif_id,
+            status=payload.status,
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/motif-patterns/{project_id}/{pattern_key}/preference")
+def update_motif_pattern_preference(
+    project_id: str,
+    pattern_key: str,
+    payload: MotifPatternPreferenceUpdate,
+) -> dict:
+    try:
+        analysis = project_motif_analysis(storage, project_id, AGENT_IDS)
+        checkpoint = next(
+            (
+                item
+                for item in analysis["checkpoints"]
+                if item["id"] == pattern_key
+                and item["observer_agent_id"] == payload.observer_agent_id
+            ),
+            None,
+        )
+        if checkpoint is None:
+            raise StorageError("Motif pattern checkpoint not found.")
+        storage.set_motif_pattern_preference(
+            project_id,
+            pattern_key,
+            observer_agent_id=payload.observer_agent_id,
+            preference=payload.preference,
+        )
+        return {
+            **checkpoint,
+            "preference": payload.preference,
+        }
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/web-sources/{project_id}")

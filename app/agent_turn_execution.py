@@ -7,6 +7,7 @@ from .agent_tools import USER_TOOL_DEFINITIONS, ToolContext
 from .execution_ledger import ExecutionLedger
 from .memory_loops import memory_loop_for
 from .models import ChatRequest, RuntimeConfig
+from .motif_checkpoints import agent_pattern_checkpoints
 from .orchestration_memory import MemoryContext
 from .orchestration_prompts import PromptBuilder
 from .orchestration_research import (
@@ -87,6 +88,40 @@ class AgentTurnExecutor:
             agent_id=agent_id,
             recent=agent_recent,
         )
+        motif_reader = getattr(self.storage, "list_motifs", None)
+        motif_context = (
+            motif_reader(
+                request.project_id,
+                observer_agent_id=agent_id,
+                statuses={"candidate", "supported", "active", "dormant"},
+                limit=20,
+            )
+            if callable(motif_reader)
+            else []
+        )
+        room_motif_context = (
+            [
+                motif
+                for motif in motif_reader(
+                    request.project_id,
+                    statuses={"supported", "active"},
+                    limit=40,
+                )
+                if motif.get("observer_agent_id") != agent_id
+            ][:12]
+            if callable(motif_reader)
+            else []
+        )
+        pattern_checkpoints = (
+            agent_pattern_checkpoints(
+                self.storage,
+                request.project_id,
+                agent_id,
+            )
+            if callable(getattr(self.storage, "primary_motif_event_sequence", None))
+            and callable(getattr(self.storage, "list_motif_pattern_preferences", None))
+            else []
+        )
         system_prompt = self.prompt_builder._build_system_prompt(
             persona=persona,
             project=project,
@@ -103,6 +138,9 @@ class AgentTurnExecutor:
             search_fallback_agent=search_fallback_agent,
             role_signals=role_signals,
             agent_id=agent_id,
+            motif_context=motif_context,
+            room_motif_context=room_motif_context,
+            pattern_checkpoints=pattern_checkpoints,
         )
         messages = self.prompt_builder._agent_messages(
             system_prompt,
@@ -124,6 +162,7 @@ class AgentTurnExecutor:
                 progress_callback=progress_callback,
                 turn_beat=1,
                 execution_ledger=execution_ledger,
+                user_message_id=user_message_id,
             )
         except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
             await self._record_provider_failure(
@@ -311,6 +350,7 @@ class AgentTurnExecutor:
         progress_callback: ProgressCallback | None,
         turn_beat: int,
         execution_ledger: ExecutionLedger,
+        user_message_id: str,
     ) -> AgentCompletion:
         completion = execution_ledger.recover_completion(
             agent_id,
@@ -342,6 +382,7 @@ class AgentTurnExecutor:
                 project_id=request.project_id,
                 turn_id=request.turn_id,
                 turn_beat=turn_beat,
+                user_message_id=user_message_id,
             ),
             temperature=runtime.temperature,
             max_tokens=runtime.max_tokens,
@@ -401,6 +442,19 @@ class AgentTurnExecutor:
             content,
             **message_arguments,
         )
+        evidence_attacher = getattr(
+            self.storage,
+            "attach_motif_response_evidence",
+            None,
+        )
+        if callable(evidence_attacher) and request.turn_id:
+            evidence_attacher(
+                project_id=request.project_id,
+                observer_agent_id=agent_id,
+                turn_id=request.turn_id,
+                turn_beat=turn_beat,
+                message_id=stored["id"],
+            )
         execution_ledger.mark_message_committed(
             agent_id,
             turn_beat,
@@ -408,7 +462,9 @@ class AgentTurnExecutor:
         )
 
         successful_actions = any(
-            event.get("result", {}).get("ok") is not False for event in completion.tool_events
+            event.get("tool") != "record_motif_observations"
+            and event.get("result", {}).get("ok") is not False
+            for event in completion.tool_events
         )
         memory_event = self._record_memory(
             request=request,
@@ -483,6 +539,7 @@ class AgentTurnExecutor:
                     progress_callback=progress_callback,
                     turn_beat=beat_number,
                     execution_ledger=execution_ledger,
+                    user_message_id=user_message_id,
                 )
             except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
                 await self._record_provider_failure(
@@ -617,6 +674,8 @@ class AgentTurnExecutor:
     ) -> dict:
         actions = []
         for event in tool_events:
+            if event.get("tool") == "record_motif_observations":
+                continue
             result = event.get("result") if isinstance(event.get("result"), dict) else {}
             arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
             actions.append(

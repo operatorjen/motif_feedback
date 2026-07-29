@@ -173,11 +173,83 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
 .composer button { background: var(--ink); color: var(--paper); border-color: var(--ink); min-width: 110px; }
 .composer button:hover { background: var(--hot); color: var(--ink); }
 
-.tab-row { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 2px solid var(--paper); }
-.tab { background: transparent; color: var(--paper); border: 0; border-right: 1px solid var(--line); }
+.tab-row { display: flex; flex: 0 0 auto; overflow-x: auto; border-bottom: 2px solid var(--paper); scrollbar-color: var(--hot) var(--ink-2); scrollbar-width: thin; }
+.tab { flex: 0 0 88px; background: transparent; color: var(--paper); border: 0; border-right: 1px solid var(--line); }
 .tab.active { background: var(--paper); color: var(--ink); }
 .tab-panel { display: none; padding: 16px; overflow-y: auto; flex: 1; }
 .tab-panel.active { display: block; }
+.motif-intro { margin-bottom: 14px; }
+.motif-measure-copy { margin: -3px 0 9px; }
+.motif-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.motif-filters label { color: var(--muted); font-size: .64rem; font-weight: 900; letter-spacing: .06em; }
+.motif-filters select { margin-top: 5px; padding: .55rem; font-size: .68rem; }
+.motif-section-label { margin-top: 18px; }
+.motif-checkpoints { display: grid; gap: 8px; }
+.motif-checkpoint { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-left: 3px solid var(--paper-2); }
+.motif-checkpoint.agent-a { border-left-color: var(--phenomenologist); }
+.motif-checkpoint.agent-b { border-left-color: var(--cyberneticist); }
+.motif-checkpoint.agent-c { border-left-color: var(--game-theorist); }
+.motif-checkpoint.preference-paused { opacity: .6; }
+.motif-checkpoint-head { display: flex; justify-content: space-between; gap: 8px; }
+.motif-checkpoint-head strong { color: var(--hot); font-size: .67rem; }
+.motif-checkpoint-head small { color: var(--muted); font-size: .56rem; }
+.motif-checkpoint-sequence { margin: 0; color: var(--paper); font-size: .74rem; font-weight: 900; overflow-wrap: anywhere; }
+.motif-checkpoint-support { color: var(--muted); font-size: .56rem; }
+.motif-checkpoint-explanation { margin: 1px 0 2px; color: var(--paper-2); font-size: .63rem; line-height: 1.4; }
+.motif-checkpoint-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.motif-checkpoint-actions button { min-width: 0; padding: 6px 3px; font-size: .52rem; }
+.motif-patterns { display: grid; gap: 7px; }
+.motif-pattern-card { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--line); }
+.motif-pattern-head { display: flex; justify-content: space-between; gap: 8px; }
+.motif-pattern-head strong { font-size: .68rem; }
+.motif-pattern-head small { color: var(--muted); font-size: .56rem; }
+.motif-pattern-card > p { margin: 0; color: var(--muted); font-size: .62rem; }
+.motif-pattern { display: grid; gap: 2px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.motif-pattern span { color: var(--paper-2); font-size: .68rem; overflow-wrap: anywhere; }
+.motif-pattern small { color: var(--hot); font-size: .56rem; }
+.motif-trajectories { display: grid; gap: 7px; }
+.motif-trajectory-card { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--line); }
+.motif-trajectory-card strong { font-size: .68rem; }
+.motif-trajectory-card span { color: var(--paper); font-size: .73rem; font-weight: 900; }
+.motif-trajectory-card small { color: var(--muted); font-size: .6rem; }
+.motif-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.motif-tag { display: grid; gap: 3px; max-width: 100%; padding: 7px 9px; border: 1px solid currentColor; background: transparent; color: var(--paper-2); text-align: left; text-transform: none; }
+.motif-tag.agent-a { color: var(--phenomenologist); }
+.motif-tag.agent-b { color: var(--cyberneticist); }
+.motif-tag.agent-c { color: var(--game-theorist); }
+.motif-tag.status-candidate { border-style: dashed; opacity: .78; }
+.motif-tag.status-dormant { opacity: .52; }
+.motif-tag.status-rejected { color: var(--danger); opacity: .48; text-decoration: line-through; }
+.motif-tag:hover, .motif-tag.selected { background: currentColor; box-shadow: 3px 3px 0 var(--paper); }
+.motif-tag:hover span, .motif-tag:hover small,
+.motif-tag.selected span, .motif-tag.selected small { color: var(--ink); }
+.motif-tag span { overflow-wrap: anywhere; font-size: .72rem; font-weight: 900; }
+.motif-tag small { color: currentColor; font-size: .56rem; text-transform: uppercase; }
+.motif-detail { min-height: 110px; padding: 10px; border: 1px solid var(--line); color: var(--muted); font-size: .7rem; line-height: 1.45; }
+.motif-detail-head { display: grid; gap: 3px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.motif-detail-head strong { color: var(--paper); font-size: .85rem; }
+.motif-detail-head.agent-a strong { color: var(--phenomenologist); }
+.motif-detail-head.agent-b strong { color: var(--cyberneticist); }
+.motif-detail-head.agent-c strong { color: var(--game-theorist); }
+.motif-detail > p { color: var(--paper-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.motif-aliases { margin: 8px 0; padding: 6px; border: 1px dashed var(--line); color: var(--muted); font-size: .61rem; overflow-wrap: anywhere; }
+.motif-actions { display: flex; gap: 6px; }
+.motif-actions button { flex: 1; padding: 6px; font-size: .6rem; }
+.motif-actions button.danger { border-color: var(--danger); background: transparent; color: var(--danger); }
+.motif-actions button.danger:hover { background: var(--danger); color: var(--ink); }
+.motif-history-label { margin-top: 14px; color: var(--paper-2); font-size: .6rem; font-weight: 900; letter-spacing: .07em; }
+.motif-history { display: grid; max-height: 28vh; margin-top: 5px; overflow-y: auto; }
+.motif-history article { padding: 7px 0; border-top: 1px solid var(--line); }
+.motif-history strong { display: block; color: var(--paper-2); font-size: .62rem; text-transform: uppercase; }
+.motif-history p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.motif-history small { color: var(--muted); font-size: .58rem; }
+.motif-evidence { display: grid; gap: 4px; margin: 7px 0; }
+.motif-evidence blockquote { margin: 0; padding: 6px 7px; border-left: 2px solid var(--hot); background: var(--ink-2); color: var(--paper-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.motif-relations { display: grid; color: var(--muted); }
+.motif-relations article { padding: 7px 0; border-top: 1px solid var(--line); }
+.motif-relations strong { display: block; color: var(--hot); font-size: .62rem; text-transform: uppercase; }
+.motif-relations p { margin: 4px 0; color: var(--paper-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.motif-relations small { font-size: .58rem; }
 .persona-summary { border: 1px solid var(--line); padding: 10px; margin: 10px 0; color: var(--paper-2); font-size: .76rem; line-height: 1.4; }
 .memory-loop-block { margin: 10px 0; border: 1px solid var(--line); padding: 10px; }
 .memory-loop-block > summary { cursor: pointer; color: var(--hot); font-size: .72rem; font-weight: 900; letter-spacing: .08em; }

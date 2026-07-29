@@ -39,6 +39,8 @@ const state = {
   activeRunInputClosed: false,
   activeRunPromptTail: "",
   renderedProject: null,
+  motifData: null,
+  selectedMotif: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -70,6 +72,13 @@ const elements = {
   memoryLoopEvents: $("#memory-loop-events"),
   globalMemorySummary: $("#global-memory-summary"),
   globalMemoryEvents: $("#global-memory-events"),
+  motifAgentFilter: $("#motif-agent-filter"),
+  motifStatusFilter: $("#motif-status-filter"),
+  motifCheckpoints: $("#motif-checkpoints"),
+  motifPatterns: $("#motif-patterns"),
+  motifTrajectories: $("#motif-trajectories"),
+  motifTags: $("#motif-tags"),
+  motifDetail: $("#motif-detail"),
   personaEditor: $("#persona-editor"),
   reloadPersona: $("#reload-persona"),
   savePersona: $("#save-persona"),
@@ -297,6 +306,368 @@ function renderAgentOptions() {
     option.selected = agent.agent_id === state.currentPersona;
     elements.personaSelect.append(option);
   }
+}
+
+function motifMatchesFilters(motif) {
+  const agent = elements.motifAgentFilter.value;
+  const status = elements.motifStatusFilter.value;
+  const agentMatches = agent === "all" || motif.observer_agent_id === agent;
+  const statusMatches = status === "all"
+    || (status === "current"
+      ? ["candidate", "supported", "active"].includes(motif.status)
+      : motif.status === status);
+  return agentMatches && statusMatches;
+}
+
+function motifAgentVisible(agentId) {
+  const selected = elements.motifAgentFilter.value;
+  return selected === "all" || selected === agentId;
+}
+
+function renderMotifTrajectories() {
+  const fragment = document.createDocumentFragment();
+  for (const agentId of Object.keys(agentMeta)) {
+    if (!motifAgentVisible(agentId)) continue;
+    const measurements = state.motifData?.trajectories?.[agentId] || {};
+    const observed = measurements.observed || {};
+    const established = measurements.established || {};
+    const usesEstablished = Number(established.sample_size || 0) > 0;
+    const summary = usesEstablished ? established : observed;
+    const card = document.createElement("article");
+    card.className = `motif-trajectory-card ${agentMeta[agentId].className}`;
+    const name = document.createElement("strong");
+    name.textContent = agentMeta[agentId].name.toUpperCase();
+    const value = document.createElement("span");
+    value.textContent = `${usesEstablished ? "ESTABLISHED" : "OBSERVED"} · ${summary.sample_size || 0} PRIMARY OBSERVATIONS`;
+    const note = document.createElement("small");
+    const recurrence = `${Math.round((summary.recurrence_rate || 0) * 100)}% RETURNS`;
+    const transitions = `${Math.round((summary.transition_diversity || 0) * 100)}% TRANSITION VARIETY`;
+    note.textContent = `${recurrence} · ${transitions}`;
+    card.append(name, value, note);
+    fragment.append(card);
+  }
+  elements.motifTrajectories.replaceChildren(fragment);
+}
+
+function patternPreferenceCopy(checkpoint) {
+  const name = agentMeta[checkpoint.observer_agent_id]?.name || checkpoint.observer_agent_id;
+  if (checkpoint.preference === "follow") {
+    return `You asked ${name} to keep following and deepen this pattern when relevant.`;
+  }
+  if (checkpoint.preference === "test") {
+    return `You asked ${name} to test this pattern's limits when relevant.`;
+  }
+  if (checkpoint.preference === "paused") {
+    return `Paused. This checkpoint is not shown to ${name}.`;
+  }
+  return `Available to ${name} as quiet reflection context; no response is required.`;
+}
+
+function renderMotifCheckpoints() {
+  const checkpoints = (state.motifData?.checkpoints || [])
+    .filter((checkpoint) => motifAgentVisible(checkpoint.observer_agent_id));
+  if (!checkpoints.length) {
+    const empty = document.createElement("p");
+    empty.className = "microcopy";
+    empty.textContent = "No established sequence has crossed the checkpoint threshold yet.";
+    elements.motifCheckpoints.replaceChildren(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const checkpoint of checkpoints) {
+    const card = document.createElement("article");
+    card.className = `motif-checkpoint ${agentMeta[checkpoint.observer_agent_id]?.className || ""} preference-${checkpoint.preference}`;
+    const head = document.createElement("div");
+    head.className = "motif-checkpoint-head";
+    const kind = document.createElement("strong");
+    kind.textContent = checkpoint.kind === "return_path" ? "RETURN PATH" : "REPEATING SEQUENCE";
+    const observer = document.createElement("small");
+    observer.textContent = (agentMeta[checkpoint.observer_agent_id]?.name || checkpoint.observer_agent_id).toUpperCase();
+    head.append(kind, observer);
+    const sequence = document.createElement("p");
+    sequence.className = "motif-checkpoint-sequence";
+    sequence.textContent = checkpoint.labels.join(" → ");
+    const support = document.createElement("small");
+    support.className = "motif-checkpoint-support";
+    support.textContent = `${checkpoint.distinct_turn_count} DISTINCT TURNS · ${checkpoint.occurrence_count} OCCURRENCES`;
+    const explanation = document.createElement("p");
+    explanation.className = "motif-checkpoint-explanation";
+    explanation.textContent = patternPreferenceCopy(checkpoint);
+    const actions = document.createElement("div");
+    actions.className = "motif-checkpoint-actions";
+    const choices = [
+      ["notice", "JUST NOTICE", "Let the agent recognize it only when naturally relevant."],
+      ["follow", "FOLLOW", "Invite the agent to stay with and deepen the pattern."],
+      ["test", "TEST", "Invite the agent to look for a boundary or counterexample."],
+      ["paused", "PAUSE", "Stop supplying this checkpoint to the agent."],
+    ];
+    for (const [preference, label, title] of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.title = title;
+      button.setAttribute("aria-label", `${label}: ${title}`);
+      button.disabled = checkpoint.preference === preference;
+      button.addEventListener("click", () => updatePatternPreference(checkpoint, preference));
+      actions.append(button);
+    }
+    card.append(head, sequence, support, explanation, actions);
+    fragment.append(card);
+  }
+  elements.motifCheckpoints.replaceChildren(fragment);
+}
+
+function renderMotifPatterns() {
+  const fragment = document.createDocumentFragment();
+  for (const agentId of Object.keys(agentMeta)) {
+    if (!motifAgentVisible(agentId)) continue;
+    const measurements = state.motifData?.trajectories?.[agentId] || {};
+    const established = measurements.established || {};
+    const observed = measurements.observed || {};
+    const establishedPatterns = [
+      ...(established.return_patterns || []),
+      ...(established.frequent_patterns || []),
+    ];
+    const observedPatterns = [
+      ...(observed.return_patterns || []),
+      ...(observed.frequent_patterns || []),
+    ];
+    const usesEstablished = establishedPatterns.length > 0;
+    const patterns = (usesEstablished ? establishedPatterns : observedPatterns).slice(0, 6);
+    const card = document.createElement("article");
+    card.className = `motif-pattern-card ${agentMeta[agentId].className}`;
+    const head = document.createElement("div");
+    head.className = "motif-pattern-head";
+    const name = document.createElement("strong");
+    name.textContent = agentMeta[agentId].name.toUpperCase();
+    const basis = document.createElement("small");
+    basis.textContent = usesEstablished ? "ESTABLISHED THREADS" : "OBSERVED DIAGNOSTIC";
+    head.append(name, basis);
+    card.append(head);
+    if (!patterns.length) {
+      const empty = document.createElement("p");
+      empty.textContent = `No sequence has recurred across ${observed.pattern_min_distinct_turns || 3} distinct turns.`;
+      card.append(empty);
+    } else {
+      const seen = new Set();
+      for (const pattern of patterns) {
+        const key = pattern.motif_ids.join("→");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const row = document.createElement("div");
+        row.className = "motif-pattern";
+        const sequence = document.createElement("span");
+        sequence.textContent = pattern.labels.join(" → ");
+        const support = document.createElement("small");
+        const isReturn = pattern.motif_ids[0] === pattern.motif_ids.at(-1)
+          && pattern.motif_ids.length > 2;
+        support.textContent = `${pattern.distinct_turn_count} TURNS · ${pattern.occurrence_count} OCCURRENCES${isReturn ? " · RETURN" : ""}`;
+        row.append(sequence, support);
+        card.append(row);
+      }
+    }
+    fragment.append(card);
+  }
+  elements.motifPatterns.replaceChildren(fragment);
+}
+
+function renderMotifTags() {
+  const motifs = (state.motifData?.motifs || []).filter(motifMatchesFilters);
+  if (!motifs.length) {
+    const empty = document.createElement("p");
+    empty.className = "microcopy";
+    empty.textContent = state.motifData?.motifs?.length
+      ? "No motifs match these filters."
+      : "No motif observations yet. They will appear after agents notice a meaningful pattern.";
+    elements.motifTags.replaceChildren(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const motif of motifs) {
+    const tag = document.createElement("button");
+    tag.type = "button";
+    tag.className = `motif-tag ${agentMeta[motif.observer_agent_id]?.className || ""} status-${motif.status}`;
+    if (motif.id === state.selectedMotif) tag.classList.add("selected");
+    const label = document.createElement("span");
+    label.textContent = motif.label;
+    const count = document.createElement("small");
+    count.textContent = `${motif.distinct_turn_count} turn${motif.distinct_turn_count === 1 ? "" : "s"} · ${motif.support_count} obs · ${motif.status}`;
+    tag.title = motif.description;
+    tag.append(label, count);
+    tag.addEventListener("click", () => openMotif(motif.id));
+    fragment.append(tag);
+  }
+  elements.motifTags.replaceChildren(fragment);
+}
+
+function renderMotifDetail(motif) {
+  if (!motif) {
+    elements.motifDetail.textContent = "Select a motif tag.";
+    return;
+  }
+  const heading = document.createElement("div");
+  heading.className = `motif-detail-head ${agentMeta[motif.observer_agent_id]?.className || ""}`;
+  const title = document.createElement("strong");
+  title.textContent = motif.label;
+  const meta = document.createElement("small");
+  meta.textContent = `${agentMeta[motif.observer_agent_id]?.name || motif.observer_agent_id} · ${motif.status} · ${motif.distinct_turn_count} distinct turns · ${motif.support_count} observations · ${Math.round(motif.confidence * 100)}% mean confidence`;
+  heading.append(title, meta);
+  const description = document.createElement("p");
+  description.textContent = motif.description;
+  const aliases = document.createElement("div");
+  aliases.className = "motif-aliases";
+  aliases.textContent = `ALIASES: ${(motif.aliases || []).join(" · ") || motif.label}`;
+
+  const actions = document.createElement("div");
+  actions.className = "motif-actions";
+  for (const status of ["active", "dormant", "rejected"]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = status.toUpperCase();
+    button.className = status === "rejected" ? "danger" : "";
+    button.disabled = motif.status === status;
+    button.addEventListener("click", () => updateMotifStatus(motif.id, status));
+    actions.append(button);
+  }
+
+  const historyLabel = document.createElement("div");
+  historyLabel.className = "motif-history-label";
+  historyLabel.textContent = "APPEND-ONLY OBSERVATION HISTORY";
+  const history = document.createElement("div");
+  history.className = "motif-history";
+  for (const event of motif.events || []) {
+    const row = document.createElement("article");
+    const head = document.createElement("strong");
+    const relation = event.relation ? ` · ${event.relation}` : "";
+    head.textContent = `${event.event_type.replaceAll("_", " ")}${relation}${event.primary ? " · primary" : ""}`;
+    const copy = document.createElement("p");
+    copy.textContent = event.description;
+    const time = document.createElement("small");
+    time.textContent = new Date(event.created_at).toLocaleString();
+    row.append(head, copy);
+    if (event.evidence?.length) {
+      const evidence = document.createElement("div");
+      evidence.className = "motif-evidence";
+      for (const message of event.evidence) {
+        const excerpt = document.createElement("blockquote");
+        const speaker = message.role === "user"
+          ? userDisplayName()
+          : agentMeta[message.agent_id]?.name || message.agent_id || message.role;
+        excerpt.textContent = `${String(speaker).toUpperCase()}: ${message.excerpt}`;
+        evidence.append(excerpt);
+      }
+      row.append(evidence);
+    }
+    row.append(time);
+    history.append(row);
+  }
+
+  const relationLabel = document.createElement("div");
+  relationLabel.className = "motif-history-label";
+  relationLabel.textContent = "PROVISIONAL RELATIONS · NO AUTOMATIC MERGING";
+  const relations = document.createElement("div");
+  relations.className = "motif-relations";
+  if (!(motif.relations || []).length) {
+    relations.textContent = "No cross-motif relations recorded.";
+  } else {
+    for (const relation of motif.relations) {
+      const row = document.createElement("article");
+      const otherIsSource = relation.target_motif_id === motif.id;
+      const otherLabel = otherIsSource ? relation.source_label : relation.target_label;
+      const otherAgent = otherIsSource
+        ? relation.source_observer_agent_id
+        : relation.target_observer_agent_id;
+      const head = document.createElement("strong");
+      head.textContent = `${relation.relation.replaceAll("_", " ")} ↔ ${otherLabel}`;
+      const copy = document.createElement("p");
+      copy.textContent = relation.description;
+      const observer = document.createElement("small");
+      observer.textContent = `ASSERTED BY ${agentMeta[relation.observer_agent_id]?.name || relation.observer_agent_id} · OTHER MOTIF OWNED BY ${agentMeta[otherAgent]?.name || otherAgent} · ${Math.round(relation.confidence * 100)}%`;
+      row.append(head, copy, observer);
+      relations.append(row);
+    }
+  }
+  elements.motifDetail.replaceChildren(
+    heading,
+    description,
+    aliases,
+    actions,
+    relationLabel,
+    relations,
+    historyLabel,
+    history,
+  );
+}
+
+async function openMotif(motifId) {
+  state.selectedMotif = motifId;
+  renderMotifTags();
+  elements.motifDetail.textContent = "Loading motif history...";
+  try {
+    const motif = await api(
+      `/api/motifs/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(motifId)}`,
+    );
+    if (state.selectedMotif === motifId) renderMotifDetail(motif);
+  } catch (error) {
+    elements.motifDetail.textContent = "Could not load this motif.";
+    showToast(error.message, true);
+  }
+}
+
+async function updateMotifStatus(motifId, status) {
+  try {
+    const motif = await api(
+      `/api/motifs/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(motifId)}/status`,
+      { method: "PUT", body: JSON.stringify({ status }) },
+    );
+    await loadMotifs();
+    state.selectedMotif = motifId;
+    renderMotifTags();
+    renderMotifDetail(motif);
+    showToast(`Motif marked ${status}.`);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function updatePatternPreference(checkpoint, preference) {
+  try {
+    await api(
+      `/api/motif-patterns/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(checkpoint.id)}/preference`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          observer_agent_id: checkpoint.observer_agent_id,
+          preference,
+        }),
+      },
+    );
+    await loadMotifs();
+    const messages = {
+      notice: "The agent may quietly notice this pattern when relevant.",
+      follow: "The agent will keep this pattern in view when relevant.",
+      test: "The agent will test this pattern's limits when relevant.",
+      paused: "This pattern checkpoint is paused.",
+    };
+    showToast(messages[preference]);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function loadMotifs() {
+  state.motifData = await api(`/api/motifs/${encodeURIComponent(state.currentProject)}`);
+  if (
+    state.selectedMotif
+    && !(state.motifData.motifs || []).some((motif) => motif.id === state.selectedMotif)
+  ) {
+    state.selectedMotif = null;
+    renderMotifDetail(null);
+  }
+  renderMotifTrajectories();
+  renderMotifCheckpoints();
+  renderMotifPatterns();
+  renderMotifTags();
 }
 
 function getSources(annotations = [], snapshots = []) {
@@ -598,6 +969,7 @@ function progressText(event) {
   if (event.type === "agent_no_response") return `${name} returned no response after two retries. The failed turn was recorded.`;
   if (event.type === "agent_provider_error") return `${name}'s provider failed. Recording the turn and continuing...`;
   if (event.type === "tool") {
+    if (event.tool === "record_motif_observations") return "";
     const path = event.result?.path || event.arguments?.path;
     if (event.result?.reason === "agent_file_size_limit") {
       return `${name} reached the file limit and is reframing the file into a tighter version...`;
@@ -934,6 +1306,7 @@ async function resumeTurn(turn) {
     await Promise.all([
       loadMessages(),
       loadMemoryLoop(),
+      loadMotifs(),
       loadFiles(),
       loadSources(),
       loadProposals(),
@@ -943,7 +1316,7 @@ async function resumeTurn(turn) {
     showToast("Turn resumed from its stored progress.");
   } catch (error) {
     showToast(error.message, true);
-    await Promise.all([loadMessages(), loadTurnRecovery()]);
+    await Promise.all([loadMessages(), loadMotifs(), loadTurnRecovery()]);
   } finally {
     state.progressNode?.remove();
     state.progressNode = null;
@@ -1298,6 +1671,7 @@ async function initialize() {
       loadMessages(),
       loadPersona(),
       loadMemoryLoop(),
+      loadMotifs(),
       loadSharedContext(),
       loadFiles(),
       loadSources(),
@@ -1327,16 +1701,29 @@ elements.toggleRightPanel.addEventListener("click", () => {
 function activateTab(name) {
   $$(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
   $$(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${name}`));
+  document.querySelector(`.tab[data-tab="${name}"]`)?.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+  });
 }
 
 $$(".tab").forEach((button) => button.addEventListener("click", async () => {
   activateTab(button.dataset.tab);
   try {
     if (button.dataset.tab === "setup") await refreshSession();
+    if (button.dataset.tab === "motifs") await loadMotifs();
   } catch (error) {
     showToast(`Could not refresh ${button.dataset.tab}: ${error.message}`, true);
   }
 }));
+
+elements.motifAgentFilter.addEventListener("change", () => {
+  renderMotifTrajectories();
+  renderMotifCheckpoints();
+  renderMotifPatterns();
+  renderMotifTags();
+});
+elements.motifStatusFilter.addEventListener("change", renderMotifTags);
 
 elements.projectSelect.addEventListener("change", async () => {
   state.currentProject = elements.projectSelect.value;
@@ -1347,6 +1734,7 @@ elements.projectSelect.addEventListener("change", async () => {
     await Promise.all([
       loadMessages(),
       loadMemoryLoop(),
+      loadMotifs(),
       loadFiles(),
       loadSources(),
       loadTurnRecovery(),
@@ -1389,6 +1777,7 @@ elements.createProject.addEventListener("click", async () => {
     await Promise.all([
       loadMessages(),
       loadMemoryLoop(),
+      loadMotifs(),
       loadFiles(),
       loadSources(),
       loadTurnRecovery(),
@@ -1425,6 +1814,7 @@ elements.deleteProject.addEventListener("click", async () => {
     await Promise.all([
       loadMessages(),
       loadMemoryLoop(),
+      loadMotifs(),
       loadFiles(),
       loadSources(),
       loadProposals(),
@@ -1495,6 +1885,7 @@ async function executeQueuedPrompt(turn) {
       await Promise.all([
         loadMessages(),
         loadMemoryLoop(),
+        loadMotifs(),
         loadFiles(),
         loadSources(),
         loadProposals(),
@@ -1507,7 +1898,7 @@ async function executeQueuedPrompt(turn) {
   } catch (error) {
     showToast(error.message, true);
     if (state.currentProject === turn.projectId) {
-      await Promise.all([loadMessages(), loadTurnRecovery()]);
+      await Promise.all([loadMessages(), loadMotifs(), loadTurnRecovery()]);
       renderRequestError(error.message);
     }
   } finally {

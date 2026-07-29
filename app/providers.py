@@ -384,7 +384,10 @@ class DirectProviderClient:
             return None, participation_retries
         if require_participation and (not content or declined):
             successful_actions = [
-                event for event in tool_events if event.get("result", {}).get("ok") is not False
+                event
+                for event in tool_events
+                if event.get("tool") != "record_motif_observations"
+                and event.get("result", {}).get("ok") is not False
             ]
             if successful_actions:
                 return (

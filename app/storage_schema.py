@@ -160,6 +160,137 @@ class StorageSchemaMixin:
                 CREATE INDEX IF NOT EXISTS idx_turn_operations_turn_agent
                 ON turn_operations(turn_id, agent_id, turn_beat, operation_type);
 
+                CREATE TABLE IF NOT EXISTS motifs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    normalized_label TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('candidate', 'supported', 'active', 'dormant', 'rejected')
+                    ),
+                    confidence REAL NOT NULL,
+                    support_count INTEGER NOT NULL DEFAULT 1,
+                    distinct_turn_count INTEGER NOT NULL DEFAULT 1,
+                    last_seen_turn_id TEXT,
+                    first_seen_user_message_id TEXT,
+                    last_seen_user_message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(project_id, observer_agent_id, normalized_label),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_motifs_project_agent_status
+                ON motifs(project_id, observer_agent_id, status, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS motif_aliases (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    motif_id TEXT NOT NULL,
+                    normalized_alias TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(project_id, observer_agent_id, normalized_alias),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(motif_id) REFERENCES motifs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_motif_aliases_motif
+                ON motif_aliases(motif_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS motif_observation_batches (
+                    id TEXT PRIMARY KEY,
+                    operation_id TEXT NOT NULL UNIQUE,
+                    project_id TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    turn_id TEXT NOT NULL,
+                    turn_beat INTEGER NOT NULL,
+                    user_message_id TEXT,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(project_id, observer_agent_id, turn_id, turn_beat),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS motif_events (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT,
+                    motif_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    actor_type TEXT NOT NULL CHECK(actor_type IN ('agent', 'user')),
+                    actor_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    relation TEXT,
+                    primary_flag INTEGER NOT NULL DEFAULT 0,
+                    confidence REAL,
+                    status TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    evidence_message_ids_json TEXT NOT NULL DEFAULT '[]',
+                    user_message_id TEXT,
+                    turn_id TEXT,
+                    turn_beat INTEGER,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(batch_id) REFERENCES motif_observation_batches(id) ON DELETE SET NULL,
+                    FOREIGN KEY(motif_id) REFERENCES motifs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_motif_events_project_agent_created
+                ON motif_events(project_id, observer_agent_id, created_at, id);
+
+                CREATE INDEX IF NOT EXISTS idx_motif_events_motif_created
+                ON motif_events(motif_id, created_at, id);
+
+                CREATE TABLE IF NOT EXISTS motif_relation_events (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT,
+                    project_id TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    source_motif_id TEXT NOT NULL,
+                    target_motif_id TEXT NOT NULL,
+                    relation TEXT NOT NULL CHECK(
+                        relation IN (
+                            'possible_alignment', 'translation', 'contrast',
+                            'extension', 'transformation', 'shared_evidence'
+                        )
+                    ),
+                    confidence REAL NOT NULL,
+                    description TEXT NOT NULL,
+                    turn_id TEXT,
+                    turn_beat INTEGER,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(batch_id) REFERENCES motif_observation_batches(id)
+                        ON DELETE SET NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(source_motif_id) REFERENCES motifs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(target_motif_id) REFERENCES motifs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_motif_relations_project_source
+                ON motif_relation_events(project_id, source_motif_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_motif_relations_project_target
+                ON motif_relation_events(project_id, target_motif_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS motif_pattern_preferences (
+                    project_id TEXT NOT NULL,
+                    pattern_key TEXT NOT NULL,
+                    observer_agent_id TEXT NOT NULL,
+                    preference TEXT NOT NULL CHECK(
+                        preference IN ('notice', 'follow', 'test', 'paused')
+                    ),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project_id, pattern_key),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_motif_pattern_preferences_project_agent
+                ON motif_pattern_preferences(project_id, observer_agent_id, updated_at DESC);
+
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL
@@ -246,6 +377,75 @@ class StorageSchemaMixin:
                     "ALTER TABLE web_sources ADD COLUMN "
                     "retrieval_attempts INTEGER NOT NULL DEFAULT 1"
                 )
+            motif_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(motifs)").fetchall()
+            }
+            added_distinct_turn_count = False
+            if "distinct_turn_count" not in motif_columns:
+                connection.execute(
+                    "ALTER TABLE motifs ADD COLUMN "
+                    "distinct_turn_count INTEGER NOT NULL DEFAULT 1"
+                )
+                added_distinct_turn_count = True
+            added_last_seen_turn_id = False
+            if "last_seen_turn_id" not in motif_columns:
+                connection.execute("ALTER TABLE motifs ADD COLUMN last_seen_turn_id TEXT")
+                added_last_seen_turn_id = True
+            motif_event_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(motif_events)").fetchall()
+            }
+            if "evidence_message_ids_json" not in motif_event_columns:
+                connection.execute(
+                    "ALTER TABLE motif_events ADD COLUMN "
+                    "evidence_message_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "related_motif_ids_json" in motif_event_columns:
+                connection.execute(
+                    "ALTER TABLE motif_events DROP COLUMN related_motif_ids_json"
+                )
+            if added_distinct_turn_count:
+                connection.execute(
+                    """
+                    UPDATE motifs
+                    SET distinct_turn_count = MAX(
+                        1,
+                        (
+                            SELECT COUNT(DISTINCT event.turn_id)
+                            FROM motif_events AS event
+                            WHERE event.motif_id = motifs.id
+                              AND event.actor_type = 'agent'
+                              AND event.turn_id IS NOT NULL
+                        )
+                    )
+                    """
+                )
+            if added_last_seen_turn_id:
+                connection.execute(
+                    """
+                    UPDATE motifs
+                    SET last_seen_turn_id = (
+                        SELECT event.turn_id
+                        FROM motif_events AS event
+                        WHERE event.motif_id = motifs.id
+                          AND event.actor_type = 'agent'
+                          AND event.turn_id IS NOT NULL
+                        ORDER BY event.created_at DESC, event.rowid DESC
+                        LIMIT 1
+                    )
+                    """
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO motif_aliases(
+                    id, project_id, observer_agent_id, motif_id,
+                    normalized_alias, alias, created_at
+                )
+                SELECT 'canonical:' || id, project_id, observer_agent_id, id,
+                       normalized_label, label, created_at
+                FROM motifs
+                """
+            )
         if not self.list_projects():
             self.create_project("General", project_id="general")
         self._run_once_migration("backfill_file_ownership_v1", self._backfill_file_ownership)

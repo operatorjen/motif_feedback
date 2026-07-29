@@ -13,6 +13,10 @@ class ToolPolicy:
 
 
 TOOL_POLICIES = {
+    "record_motif_observations": ToolPolicy(
+        changes_state=True,
+        interrupted_recovery="read_motif_batch",
+    ),
     "propose_persona_update": ToolPolicy(
         changes_state=True,
         interrupted_recovery="manual_review",
@@ -63,4 +67,7 @@ def public_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any
         ]
         evidence = public.pop("evidence", [])
         public["evidence_count"] = len(evidence) if isinstance(evidence, list) else 0
+    if name == "record_motif_observations":
+        observations = public.pop("observations", [])
+        public["observation_count"] = len(observations) if isinstance(observations, list) else 0
     return public

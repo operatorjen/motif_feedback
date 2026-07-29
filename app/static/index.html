@@ -93,6 +93,7 @@
     <aside class="inspector" id="right-panel" aria-label="Inspector">
       <div class="tab-row" role="tablist">
         <button class="tab active" data-tab="agents" type="button">AGENTS</button>
+        <button class="tab" data-tab="motifs" type="button">MOTIFS</button>
         <button class="tab" data-tab="setup" type="button">SETUP</button>
         <button class="tab" data-tab="sources" type="button">SOURCES</button>
         <button class="tab" data-tab="files" type="button">FILES</button>
@@ -129,6 +130,59 @@
             <button id="save-shared-context" type="button">SAVE CONTEXT</button>
           </div>
         </details>
+      </section>
+
+      <section class="tab-panel" id="tab-motifs">
+        <div class="section-label">OBSERVER-SPECIFIC MOTIFS</div>
+        <p class="microcopy motif-intro">
+          Provisional patterns each agent notices in this project. They do not alter persona
+          memory. Recurrence is counted across distinct turns; aliases stay attached to one
+          observer-owned thread. You decide how agents treat established pattern checkpoints.
+        </p>
+        <div class="motif-filters">
+          <label>OBSERVER
+            <select id="motif-agent-filter">
+              <option value="all">ALL AGENTS</option>
+              <option value="agent_a">PHENOMENOLOGIST</option>
+              <option value="agent_b">CYBERNETICIST</option>
+              <option value="agent_c">GAME THEORIST</option>
+            </select>
+          </label>
+          <label>LIFECYCLE
+            <select id="motif-status-filter">
+              <option value="current">LIVE + CANDIDATES</option>
+              <option value="candidate">CANDIDATES</option>
+              <option value="supported">SUPPORTED</option>
+              <option value="active">ACTIVE</option>
+              <option value="dormant">DORMANT</option>
+              <option value="rejected">REJECTED</option>
+              <option value="all">ALL STATES</option>
+            </select>
+          </label>
+        </div>
+        <div class="section-label motif-section-label">PATTERN CHECKPOINTS</div>
+        <p class="microcopy motif-measure-copy">
+          When an established sequence returns across at least three turns, you can let its
+          observer simply notice it, keep following it, test its limits, or pause it. A checkpoint
+          never changes memory, persona, motif status, or speaking order.
+        </p>
+        <div id="motif-checkpoints" class="motif-checkpoints"></div>
+        <div class="section-label motif-section-label">RECURRING SEQUENCE PATTERNS</div>
+        <p class="microcopy motif-measure-copy">
+          These are actual repeated transitions, short sequences, and recursive returns supported
+          across at least three distinct turns.
+        </p>
+        <div id="motif-patterns" class="motif-patterns"></div>
+        <div class="section-label motif-section-label">TRAJECTORY SUMMARY</div>
+        <p class="microcopy motif-measure-copy">
+          Recurrence and transition variety summarize each observer's recorded path. Established
+          motifs are preferred; raw observations remain diagnostic.
+        </p>
+        <div id="motif-trajectories" class="motif-trajectories"></div>
+        <div class="section-label motif-section-label">MOTIF TAGS</div>
+        <div id="motif-tags" class="motif-tags"></div>
+        <div class="section-label motif-section-label">INSPECTION + LIFECYCLE</div>
+        <div id="motif-detail" class="motif-detail">Select a motif tag.</div>
       </section>
 
       <section class="tab-panel" id="tab-setup">
