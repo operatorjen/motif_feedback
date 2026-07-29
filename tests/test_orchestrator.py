@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import yaml
 
 from app.models import ChatRequest, RuntimeConfig
+from app.orchestration_memory import MemoryContext
+from app.orchestration_prompts import PromptBuilder
 from app.orchestrator import Orchestrator
 from app.providers import AgentCompletion, ProviderError, ProviderTimeout
 from app.search_router import SearchDecision, SearchRouter
@@ -584,7 +586,7 @@ def test_runtime_persona_preserves_identity_and_adaptation_without_empty_scaffol
         (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
     )
 
-    compact = Orchestrator._runtime_persona(persona, include_research=False)
+    compact = PromptBuilder._runtime_persona(persona, include_research=False)
     compact_yaml = yaml.safe_dump(compact, sort_keys=False, allow_unicode=True)
     full_yaml = yaml.safe_dump(persona, sort_keys=False, allow_unicode=True)
 
@@ -599,7 +601,7 @@ def test_runtime_persona_preserves_identity_and_adaptation_without_empty_scaffol
     assert "research_style" not in compact
     assert len(compact_yaml) < len(full_yaml) * 0.7
 
-    research_compact = Orchestrator._runtime_persona(persona, include_research=True)
+    research_compact = PromptBuilder._runtime_persona(persona, include_research=True)
     assert research_compact["research_style"] == persona["research_style"]
 
 
@@ -635,7 +637,7 @@ def test_memory_selection_uses_compact_references_for_transcript_duplicates():
         }
     ]
 
-    selected = Orchestrator._select_memory_history(
+    selected = MemoryContext._select_memory_history(
         events,
         query="How did the feedback threshold change?",
         limit=2,
@@ -647,7 +649,7 @@ def test_memory_selection_uses_compact_references_for_transcript_duplicates():
         "recent-duplicate",
         "relevant-older",
     ]
-    formatted = Orchestrator._format_memory_history(selected)
+    formatted = PromptBuilder._format_memory_history(selected)
     assert "event(s) recent-duplicate" in formatted
     assert "already represented in the room transcript" in formatted
     assert "recent duplicate" not in formatted
@@ -678,7 +680,7 @@ def test_memory_context_consolidates_beats_without_changing_the_raw_ledger():
         },
     ]
 
-    consolidated = Orchestrator._consolidate_memory_turns(raw_events)
+    consolidated = MemoryContext._consolidate_memory_turns(raw_events)
 
     assert len(raw_events) == 2
     assert len(consolidated) == 1
@@ -696,15 +698,7 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
     shared_context = (
         seed_root / "shared" / "meta-instructional-agents.md"
     ).read_text(encoding="utf-8")
-    orchestrator = Orchestrator(
-        fake_settings(),
-        FakeStorage(),
-        FakePersonas(),
-        TimeoutThenRespond(),
-        SearchRouter(),
-    )
-
-    prompt = orchestrator._build_system_prompt(
+    prompt = PromptBuilder(fake_settings())._build_system_prompt(
         persona=persona,
         project={"id": "general", "name": "General"},
         shared_context=shared_context,

@@ -1,6 +1,46 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    changes_state: bool = False
+    interrupted_recovery: str = "none"
+
+
+TOOL_POLICIES = {
+    "propose_persona_update": ToolPolicy(
+        changes_state=True,
+        interrupted_recovery="manual_review",
+    ),
+    "write_project_file": ToolPolicy(
+        changes_state=True,
+        interrupted_recovery="verify_content_hash",
+    ),
+}
+
+
+def tool_changes_state(name: str) -> bool:
+    return TOOL_POLICIES.get(name, ToolPolicy()).changes_state
+
+
+def tool_recovery_strategy(name: str) -> str:
+    return TOOL_POLICIES.get(name, ToolPolicy()).interrupted_recovery
+
+
+def tool_request_fingerprint(name: str, arguments: dict[str, Any]) -> str:
+    """Return one canonical identity for a tool request and its arguments."""
+    encoded = json.dumps(
+        {"tool": name, "arguments": arguments},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def public_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:

@@ -157,7 +157,7 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
 .composer button { background: var(--ink); color: var(--paper); border-color: var(--ink); min-width: 110px; }
 .composer button:hover { background: var(--hot); color: var(--ink); }
 
-.tab-row { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 2px solid var(--paper); }
+.tab-row { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 2px solid var(--paper); }
 .tab { background: transparent; color: var(--paper); border: 0; border-right: 1px solid var(--line); }
 .tab.active { background: var(--paper); color: var(--ink); }
 .tab-panel { display: none; padding: 16px; overflow-y: auto; flex: 1; }
@@ -242,6 +242,14 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
 .source-copy { margin-bottom: 12px; }
 .source-list { border-top: 1px solid var(--line); }
 .source-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--line); }
+.turn-list { margin-top: 10px; border-top: 1px solid var(--line); }
+.turn-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.turn-row-head, .turn-row-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.turn-row strong { font-size: .68rem; letter-spacing: .04em; }
+.turn-row p { margin: 7px 0; font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.turn-row small { display: block; color: var(--muted); font-size: .62rem; line-height: 1.45; }
+.turn-row-actions { justify-content: flex-start; margin-top: 8px; }
+.turn-row-actions button { padding: 6px 8px; font-size: .62rem; }
 .source-open { min-width: 0; display: grid; gap: 5px; text-transform: none; background: transparent; color: var(--paper); border: 0; text-align: left; }
 .source-open:hover { background: var(--paper); color: var(--ink); }
 .source-open span, .source-open small { min-width: 0; overflow-wrap: anywhere; }

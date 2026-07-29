@@ -17,7 +17,39 @@ work or allow them to operate independently.
 This is a personal experimental system for localhost. It is not a production multi-user
 service.
 
-## Motif-centered continuity
+## Quick start
+
+Docker with Compose is the intended way to run the complete system.
+
+```bash
+git clone https://github.com/operatorjen/motif_feedback.git
+cd motif_feedback
+cp .env.example .env
+```
+
+Add API keys to `.env` only for the hosted providers you intend to use. Local providers can be
+configured later in the application.
+
+```bash
+docker compose build --pull
+docker compose up -d
+```
+
+Open `http://127.0.0.1:8000`, then select a provider and model for each agent in **SETUP**.
+
+On Linux, run `./scripts/init-linux.sh` first if the containers cannot write to `./workspace`.
+
+To rebuild both services while developing:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build runner app
+```
+
+Stop the system with `docker compose down`.
+
+## How the room works
+
+### Motif-centered continuity
 
 Each agent has a durable center of return:
 
@@ -47,57 +79,22 @@ supersede older records, and a matching manual persona edit records deliberate i
 Selected agents speak sequentially, so later agents can respond to earlier returns in the same
 round. Direct address, research routing, or rotation determines who speaks first.
 
+### Turn order, queueing, and recovery
+
 The chat composer remains available while a room turn is running. Additional submissions enter
-a bounded, first-in-first-out browser queue and begin one at a time after the active turn
-finishes. Each queued prompt retains the project, selected participants, and research mode from
-the moment it was submitted. Waiting prompts can be removed before they start. The queue lives
-only in the current browser tab and is not persisted across a reload. Once a queued prompt
-starts, the server records its unique turn identifier and lifecycle. Repeating an already
-completed identifier returns the stored result rather than running the agents twice.
+a bounded, first-in-first-out browser queue. A queued prompt retains its project, participants,
+and research mode and may be removed before it begins. The queue exists only in the current
+browser tab, so reloading discards prompts that have not started.
 
-## Quick start
+Once a prompt starts, the server records its turn identifier and lifecycle. Reusing a completed
+identifier returns the stored result instead of running the agents twice. The **TURNS** inspector
+shows status, duration, provider-request counts, provider-reported token use, and the current
+recovery stage.
 
-Docker with Compose is the intended way to run the complete system.
-
-```bash
-git clone https://github.com/operatorjen/motif_feedback.git
-cd motif_feedback
-cp .env.example .env
-```
-
-Add API keys to `.env` only for the hosted providers you intend to use. Local providers can be
-configured later in the application.
-
-```bash
-docker compose build --pull
-docker compose up -d
-```
-
-Open:
-
-```text
-http://127.0.0.1:8000
-```
-
-In **SETUP**, select a provider and model for each agent.
-
-On Linux, run the following first if the containers cannot write to `./workspace`:
-
-```bash
-./scripts/init-linux.sh
-```
-
-To rebuild both services while developing:
-
-```bash
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build runner app
-```
-
-To stop the system:
-
-```bash
-docker compose down
-```
+An interrupted or failed turn can resume unfinished work or be explicitly accepted as partial.
+Provider completion, message storage, memory storage, response-beat completion, and agent
+completion are checkpointed separately, so recovery starts at the first unfinished stage without
+duplicating committed messages or changing sequential room causality.
 
 ## Providers
 
@@ -123,7 +120,9 @@ Model inference is local only when the selected provider is local. A hosted or c
 receives the relevant system prompt, persona, conversation, continuity, and project context for
 that request.
 
-## Projects and tools
+## Projects, sources, and tools
+
+### Project continuity
 
 Each project keeps its own conversation, files, supplied-page snapshots, and detailed agent
 continuity records. Raw response-beat records remain visible in the inspector, while prompt
@@ -131,6 +130,8 @@ context groups beats from one agent turn, favors relevant returns, and uses comp
 references where the room transcript already contains the same exchange. Compact,
 provenance-labelled returns may be shown to the same agent in another project as provisional
 context.
+
+### Project files
 
 Agents can list, read, search, create, and revise permitted project files. Their file tools are
 confined to the current project folder:
@@ -143,22 +144,24 @@ An agent may revise a file it created. Editing another agent's file requires the
 sharing for that specific file. Agents cannot overwrite uploaded user files, delete files or
 projects, run a shell, install packages, or control Docker.
 
+### Web retrieval
+
 Public HTTP(S) URLs pasted into a prompt can be fetched through a bounded read-only page reader
 and stored under the current project. An optional ordered `WEB_FETCH_USER_AGENTS` JSON list lives
 only in the ignored local `.env`; `WEB_FETCH_USER_AGENT_ATTEMPTS` chooses whether the reader uses
-one or, at most, two profiles. Up to three independent supplied URLs are retrieved concurrently,
-while their stored and prompt order remains the order in which the user supplied them. No URLs
-or domains are configured or hardcoded.
+one or, at most, two profiles. By default, up to three independent supplied URLs are retrieved
+concurrently, while their stored and prompt order remains the order in which the user supplied
+them. The three-URL limit can be changed locally. No URLs or domains are configured or hardcoded.
 
-When all configured direct attempts return HTTP 403, research modes other than **OFF** can route
-the exact failed URL to one selected agent whose provider declares compatible native search.
-That agent is instructed to try the exact URL and domain first, cite web-derived claims, disclose
-substitute sources, and never claim it directly read a page that remained blocked. Later agents
-receive its cited response through the room transcript instead of duplicating the search. Search
-output without provider-returned URL citations is treated as no evidence and is not stored as an
-agent response.
-Direct snapshots record their retrieval method and attempt count; search-grounded messages record
-the failed direct attempt and returned citations as separate provenance.
+Recoverable direct-read failures—HTTP 401/403/429/451, server errors, timeouts, DNS failure, or
+pages without server-rendered readable text—may route the exact failed URL to one selected agent
+whose provider declares compatible native search. This occurs only when research is enabled.
+Unsafe URLs, unsupported content types, and ordinary not-found responses are not escalated.
+
+Search-derived claims require provider-returned URL citations. The search agent must disclose
+substitute sources and cannot claim it directly read a page that remained blocked. Uncited search
+output is treated as no evidence and is not stored as an agent response. Direct snapshots and
+search-derived responses retain separate provenance.
 
 If every supplied page fails and no compatible search fallback is available—or the fallback
 returns no cited evidence—the room records the retrieval outcome and skips all ordinary agent
@@ -168,6 +171,8 @@ evidence while failures remain visible.
 
 The direct reader still does not execute JavaScript, retain cookies, solve browser challenges, or
 provide agents with arbitrary network access or unrestricted web-search discovery.
+
+### User-approved Python
 
 Agents may create Python files, but they cannot execute them. A run begins only when the user
 selects a `.py` file and presses **RUN**. The project is copied into a separate runner container
@@ -189,6 +194,26 @@ trace and provider-reported token counts when available; generated bodies and so
 not copied into the trace. Seeded personas, shared context, and the provider catalog are copied
 from `app/seed/` on first startup. The runtime configuration is created only after you save
 provider and model selections in **SETUP**. Afterward, all workspace state is persistent.
+
+SQLite schema changes are applied in place and rebuildable full-text indexes accelerate relevant
+local and cross-project memory retrieval. If FTS5 is unavailable, the existing bounded lexical
+selection remains active. Room execution also has high default ceilings
+(`ROOM_MAX_PROVIDER_REQUESTS` and `ROOM_MAX_ELAPSED_SECONDS`) that stop pathological runs without
+changing the normal three-agent flow. Diagnostics and recovery checkpoints persist by default;
+setting `TURN_TRACE_RETENTION_DAYS` to a positive value prunes old completed or explicitly
+resolved diagnostics without removing conversation messages or completed replay results.
+
+State-changing agent tools receive deterministic operation identifiers. A completed file write
+or persona proposal is not executed twice when a provider loop is replayed. If a restart leaves a
+file write uncertain, the system verifies its requested content hash before deciding whether it
+must write again. An interrupted persona update is stopped for user review instead of being
+applied a second time automatically.
+
+Room coordination, response execution, prompt construction, memory-context selection, and
+checkpoint persistence live in separate internal modules. SQLite access retains one `Storage`
+facade while schema migration, turns, files, memory, sources, projects, and messages are organized
+by domain behind it. This changes maintainability and recovery behavior, not prompts, speaker
+order, visible response wording, or the normal chat flow.
 
 Back up `workspace/` to preserve the complete local state. Keep `.env` separate because it may
 contain provider secrets.

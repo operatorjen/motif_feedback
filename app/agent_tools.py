@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 from .constants import (
@@ -12,12 +13,20 @@ from .file_tools import FileToolError, ProjectFileTools
 from .models import PersonaUpdate
 from .persona_store import PersonaStore, PersonaUpdateError
 from .storage import StorageError
+from .tool_metadata import (
+    tool_changes_state,
+    tool_recovery_strategy,
+    tool_request_fingerprint,
+)
 
 
 @dataclass(frozen=True)
 class ToolContext:
     agent_id: str
     project_id: str
+    turn_id: str | None = None
+    turn_beat: int = 1
+    operation_id: str | None = None
 
 
 USER_TOOL_DEFINITIONS = [
@@ -160,12 +169,124 @@ USER_TOOL_DEFINITIONS = [
     },
 ]
 
+
 class AgentToolExecutor:
     def __init__(self, file_tools: ProjectFileTools, persona_store: PersonaStore) -> None:
         self.file_tools = file_tools
         self.persona_store = persona_store
 
     def execute(self, name: str, arguments: dict[str, Any], context: ToolContext) -> dict:
+        if (
+            not tool_changes_state(name)
+            or not context.turn_id
+            or not context.operation_id
+            or not callable(getattr(self.file_tools.storage, "begin_turn_operation", None))
+        ):
+            return self._execute_once(name, arguments, context)
+
+        storage = self.file_tools.storage
+        existed_before = False
+        if name == "write_project_file":
+            try:
+                existed_before = self.file_tools.confined_path(
+                    context.project_id,
+                    arguments.get("path", ""),
+                ).exists()
+            except (FileToolError, StorageError, ValueError):
+                existed_before = False
+        payload = {
+            "tool": name,
+            "arguments": (
+                {
+                    "path": arguments.get("path"),
+                    "bytes": len(str(arguments.get("content") or "").encode("utf-8")),
+                    "content_sha256": sha256(
+                        str(arguments.get("content") or "").encode("utf-8")
+                    ).hexdigest(),
+                    "existed_before": existed_before,
+                }
+                if name == "write_project_file"
+                else {"change_count": len(arguments.get("changes") or [])}
+            ),
+        }
+        operation = storage.begin_turn_operation(
+            operation_id=context.operation_id,
+            turn_id=context.turn_id,
+            project_id=context.project_id,
+            agent_id=context.agent_id,
+            turn_beat=context.turn_beat,
+            operation_type=f"tool:{name}",
+            request_fingerprint=tool_request_fingerprint(name, arguments),
+            payload=payload,
+        )
+        if operation["status"] == "completed":
+            return dict(operation.get("result") or {})
+        if not operation["created"]:
+            recovered = self._recover_started_tool(name, arguments, context, payload)
+            if recovered is not None:
+                storage.complete_turn_operation(context.operation_id, recovered)
+                return recovered
+        result = self._execute_once(name, arguments, context)
+        storage.complete_turn_operation(context.operation_id, result)
+        return result
+
+    def _recover_started_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: ToolContext,
+        payload: dict,
+    ) -> dict | None:
+        recovery_strategy = tool_recovery_strategy(name)
+        if recovery_strategy == "manual_review":
+            return {
+                "ok": False,
+                "retryable": False,
+                "reason": "prior_outcome_requires_review",
+                "error": (
+                    "A restart interrupted this persona update after it began. "
+                    "Inspect the persona and proposals before submitting it again."
+                ),
+            }
+        if recovery_strategy != "verify_content_hash":
+            return None
+        try:
+            path = self.file_tools.confined_path(
+                context.project_id,
+                arguments["path"],
+            )
+            if not path.exists() or not path.is_file():
+                return None
+            digest = sha256(path.read_bytes()).hexdigest()
+            expected = payload["arguments"]["content_sha256"]
+            if digest != expected:
+                return None
+            owner = (
+                self.file_tools.storage.get_file_owner(
+                    context.project_id,
+                    arguments["path"],
+                )
+                or {}
+            )
+            return {
+                "ok": True,
+                "path": arguments["path"],
+                "bytes_written": payload["arguments"]["bytes"],
+                "overwritten": bool(payload["arguments"]["existed_before"]),
+                "owner_type": owner.get("owner_type", "agent"),
+                "owner_id": owner.get("owner_id", context.agent_id),
+                "shared_agent_edit": bool(owner.get("shared_agent_edit")),
+                "recovered_after_restart": True,
+            }
+        except (KeyError, OSError, StorageError, ValueError):
+            return None
+
+    def _execute_once(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: ToolContext,
+    ) -> dict:
         try:
             if name == "list_project_sources":
                 return {
@@ -181,7 +302,10 @@ class AgentToolExecutor:
             if name == "list_project_files":
                 return {"ok": True, "files": self.file_tools.list_files(context.project_id)}
             if name == "read_project_file":
-                return {"ok": True, **self.file_tools.read_file(context.project_id, arguments["path"])}
+                return {
+                    "ok": True,
+                    **self.file_tools.read_file(context.project_id, arguments["path"]),
+                }
             if name == "search_project_files":
                 results = self.file_tools.search_files(
                     context.project_id,

@@ -63,10 +63,14 @@ class PageFetchError(WebSourceError):
         *,
         status_code: int | None = None,
         attempt_count: int = 1,
+        reason: str = "fetch_failed",
+        search_fallback_eligible: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.attempt_count = max(1, int(attempt_count))
+        self.reason = reason
+        self.search_fallback_eligible = bool(search_fallback_eligible)
 
 
 @dataclass(frozen=True)
@@ -246,7 +250,10 @@ class WebPageFetcher:
                 )
             except PageFetchError as exc:
                 exc.attempt_count = attempt_index
-                if exc.status_code != 403 or attempt_index >= len(profiles):
+                if (
+                    exc.status_code not in {401, 403, 429, 451}
+                    or attempt_index >= len(profiles)
+                ):
                     raise
         raise PageFetchError("The page fetch attempts ended unexpectedly.")
 
@@ -294,10 +301,16 @@ class WebPageFetcher:
                             current = normalize_public_url(urljoin(current, location))
                             continue
                         if response.status_code >= 400:
+                            fallback_eligible = (
+                                response.status_code in {401, 403, 429, 451}
+                                or response.status_code >= 500
+                            )
                             raise PageFetchError(
                                 f"The page returned HTTP {response.status_code}.",
                                 status_code=response.status_code,
                                 attempt_count=attempt_count,
+                                reason="http_error",
+                                search_fallback_eligible=fallback_eligible,
                             )
                         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                         if content_type and content_type not in ALLOWED_CONTENT_TYPES:
@@ -308,7 +321,29 @@ class WebPageFetcher:
                         final_type = content_type or self._infer_content_type(body)
                         title, text = self._extract_text(body, final_type, current, response.encoding)
                         if not text:
-                            raise PageFetchError("The page contained no readable text.")
+                            raise PageFetchError(
+                                "The page contained no readable text.",
+                                reason="no_readable_text",
+                                search_fallback_eligible=True,
+                            )
+                        compact_text = " ".join(text.lower().split())
+                        if final_type in {"text/html", "application/xhtml+xml"} and (
+                            len(compact_text) < 500
+                            and any(
+                                phrase in compact_text
+                                for phrase in (
+                                    "enable javascript",
+                                    "javascript is required",
+                                    "requires javascript",
+                                    "turn on javascript",
+                                )
+                            )
+                        ):
+                            raise PageFetchError(
+                                "The page requires JavaScript before it exposes readable content.",
+                                reason="javascript_required",
+                                search_fallback_eligible=True,
+                            )
                         text_truncated = len(text) > self.settings.web_fetch_max_text_chars
                         if text_truncated:
                             text = text[: self.settings.web_fetch_max_text_chars].rstrip()
@@ -324,9 +359,17 @@ class WebPageFetcher:
                             retrieval_attempts=attempt_count,
                         )
                 except httpx.TimeoutException as exc:
-                    raise PageFetchError("The page timed out before it could be read.") from exc
+                    raise PageFetchError(
+                        "The page timed out before it could be read.",
+                        reason="timeout",
+                        search_fallback_eligible=True,
+                    ) from exc
                 except httpx.HTTPError as exc:
-                    raise PageFetchError(f"The page could not be reached: {exc}") from exc
+                    raise PageFetchError(
+                        f"The page could not be reached: {exc}",
+                        reason="unreachable",
+                        search_fallback_eligible=True,
+                    ) from exc
         raise PageFetchError("The page redirect loop ended unexpectedly.")
 
     async def _validate_target(self, url: str) -> None:
@@ -370,7 +413,11 @@ class WebPageFetcher:
                 type=socket.SOCK_STREAM,
             )
         except socket.gaierror as exc:
-            raise PageFetchError("The page hostname could not be resolved.") from exc
+            raise PageFetchError(
+                "The page hostname could not be resolved.",
+                reason="dns_failure",
+                search_fallback_eligible=True,
+            ) from exc
         return sorted({result[4][0] for result in results})
 
     async def _bounded_body(self, response: httpx.Response) -> tuple[bytes, bool]:
@@ -477,6 +524,10 @@ class WebSourceService:
                 }
                 if isinstance(exc, PageFetchError):
                     failure["attempt_count"] = exc.attempt_count
+                    failure["reason"] = exc.reason
+                    failure["search_fallback_eligible"] = (
+                        exc.search_fallback_eligible
+                    )
                     if exc.status_code is not None:
                         failure["status_code"] = exc.status_code
                 await self._emit(progress_callback, {"type": "source_fetch_error", **failure})

@@ -92,6 +92,24 @@ class Settings(BaseSettings):
         le=500,
         alias="PROVIDER_TOOL_CALLS_PER_TURN",
     )
+    room_max_provider_requests: int = Field(
+        default=64,
+        ge=1,
+        le=256,
+        alias="ROOM_MAX_PROVIDER_REQUESTS",
+    )
+    room_max_elapsed_seconds: float = Field(
+        default=900,
+        gt=0,
+        le=3_600,
+        alias="ROOM_MAX_ELAPSED_SECONDS",
+    )
+    turn_trace_retention_days: int = Field(
+        default=0,
+        ge=0,
+        le=3_650,
+        alias="TURN_TRACE_RETENTION_DAYS",
+    )
     max_context_messages: int = Field(default=30, alias="MAX_CONTEXT_MESSAGES")
     max_tool_rounds: int = Field(default=6, alias="MAX_TOOL_ROUNDS")
     max_upload_bytes: int = Field(default=5_242_880, alias="MAX_UPLOAD_BYTES")

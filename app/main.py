@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import threading
-import time
-import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -27,6 +25,7 @@ from .constants import (
     MAX_PROJECT_MESSAGE_LIMIT,
     MAX_WEB_SOURCE_LIMIT,
 )
+from .execution_semantics import public_execution_stage
 from .file_tools import FileToolError, ProjectFileTools
 from .memory_loops import memory_loop_for
 from .models import (
@@ -55,6 +54,7 @@ from .run_sessions import CodeRunSession
 from .search_router import SearchRouter
 from .security import LocalSecurityMiddleware, LocalSessionGuard
 from .storage import ChatTurnConflictError, Storage, StorageError
+from .turn_service import ChatTurnStateError, TurnService
 from .web_sources import WebSourceService
 
 settings = get_settings()
@@ -100,6 +100,7 @@ orchestrator = Orchestrator(
     SearchRouter(),
     web_source_service,
 )
+turn_service = TurnService(settings, storage, orchestrator)
 
 
 @asynccontextmanager
@@ -108,6 +109,7 @@ async def lifespan(app: FastAPI):
     provider_catalog_store.initialize()
     persona_store.initialize()
     storage.initialize()
+    storage.prune_chat_turn_traces(settings.turn_trace_retention_days)
     settings.load_runtime_config()
     app.state.chat_lock = asyncio.Lock()
     app.state.code_run_lock = asyncio.Lock()
@@ -126,64 +128,13 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
+app.add_middleware(
+    TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"]
+)
 app.add_middleware(LocalSecurityMiddleware, guard=guard)
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
-
-
-class ChatTurnStateError(RuntimeError):
-    pass
-
-
-def _chat_request_fingerprint(payload: ChatRequest) -> str:
-    encoded = json.dumps(
-        payload.model_dump(exclude={"turn_id"}),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _room_result_payload(result) -> dict:
-    return {
-        "messages": result.messages,
-        "research": result.research,
-        "agent_failures": result.agent_failures,
-        "web_sources": result.web_sources,
-        "source_failures": result.source_failures,
-    }
-
-
-def _trace_event(event: dict, started: float) -> dict:
-    trace = {
-        "type": str(event.get("type") or "progress"),
-        "elapsed_ms": round((time.monotonic() - started) * 1_000, 3),
-    }
-    for key in (
-        "agent_id",
-        "provider",
-        "model",
-        "round",
-        "turn_beat",
-        "url",
-        "status_code",
-        "attempt_count",
-        "retrieval_method",
-        "tool",
-        "message_id",
-    ):
-        value = event.get(key)
-        if value is not None and isinstance(value, (str, int, float, bool)):
-            trace[key] = value
-    message = event.get("message")
-    if isinstance(message, dict):
-        metadata = message.get("metadata")
-        if isinstance(metadata, dict) and isinstance(metadata.get("provider_usage"), dict):
-            trace["provider_usage"] = metadata["provider_usage"]
-    return trace
 
 
 async def _execute_chat_turn(
@@ -191,63 +142,11 @@ async def _execute_chat_turn(
     runtime: RuntimeConfig,
     progress_callback=None,
 ) -> dict:
-    if payload.turn_id is None:
-        payload = payload.model_copy(update={"turn_id": uuid.uuid4().hex})
-    assert payload.turn_id is not None
-    started = time.monotonic()
-    trace_events: list[dict] = []
-
-    async def report(event: dict) -> None:
-        trace_events.append(_trace_event(event, started))
-        if progress_callback is not None:
-            await progress_callback(event)
-
-    try:
-        turn = storage.begin_chat_turn(
-            payload.turn_id,
-            payload.project_id,
-            _chat_request_fingerprint(payload),
-        )
-    except ChatTurnConflictError as exc:
-        raise ChatTurnStateError(str(exc)) from exc
-    if not turn["created"]:
-        if turn["status"] == "completed" and isinstance(turn["result"], dict):
-            return turn["result"]
-        raise ChatTurnStateError(
-            "That room turn did not complete previously. Submit it again as a new prompt."
-        )
-
-    try:
-        result = await orchestrator.chat(payload, runtime, progress_callback=report)
-        public_result = _room_result_payload(result)
-        trace = {
-            "duration_ms": round((time.monotonic() - started) * 1_000, 3),
-            "events": trace_events,
-        }
-        storage.complete_chat_turn(payload.turn_id, public_result, trace)
-        return public_result
-    except asyncio.CancelledError:
-        storage.fail_chat_turn(
-            payload.turn_id,
-            status="interrupted",
-            detail="The streaming client disconnected before the room turn completed.",
-            trace={
-                "duration_ms": round((time.monotonic() - started) * 1_000, 3),
-                "events": trace_events,
-            },
-        )
-        raise
-    except Exception as exc:
-        storage.fail_chat_turn(
-            payload.turn_id,
-            status="failed",
-            detail=str(exc),
-            trace={
-                "duration_ms": round((time.monotonic() - started) * 1_000, 3),
-                "events": trace_events,
-            },
-        )
-        raise
+    return await turn_service.execute(
+        payload,
+        runtime,
+        progress_callback,
+    )
 
 
 @app.get("/healthz")
@@ -266,10 +165,7 @@ def _runtime_state() -> dict:
     return {
         "setup_complete": setup_complete,
         "key_configured": setup_complete
-        and all(
-            provider_registry.ready(provider)
-            for provider in set(runtime.providers.values())
-        ),
+        and all(provider_registry.ready(provider) for provider in set(runtime.providers.values())),
         "provider_status": provider_registry.status(),
         "provider_catalog": provider_registry.public_profiles(),
         "runtime": runtime.model_dump() if runtime is not None else None,
@@ -311,9 +207,7 @@ def get_setup() -> dict:
 @app.put("/api/setup")
 def update_setup(payload: SetupUpdate) -> dict:
     runtime = payload
-    enabled_providers = {
-        profile.id for profile in provider_registry.profiles(enabled_only=True)
-    }
+    enabled_providers = {profile.id for profile in provider_registry.profiles(enabled_only=True)}
     unknown = sorted(set(runtime.providers.values()) - enabled_providers)
     if unknown:
         raise HTTPException(
@@ -395,6 +289,72 @@ def project_messages(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _public_chat_turn(
+    turn: dict,
+    operations: list[dict] | None = None,
+) -> dict:
+    request_payload = turn.get("request") or {}
+    trace = turn.get("trace") or {}
+    if operations is None:
+        operations = storage.list_turn_operations(turn["id"])
+    return {
+        "id": turn["id"],
+        "project_id": turn["project_id"],
+        "status": turn["status"],
+        "resolution": turn.get("resolution"),
+        "resumable": bool(
+            turn["status"] in {"failed", "interrupted"}
+            and not turn.get("resolution")
+            and turn.get("request")
+            and turn.get("runtime")
+        ),
+        "message": str(request_payload.get("message") or ""),
+        "participants": request_payload.get("participants") or [],
+        "research_mode": request_payload.get("research_mode"),
+        "failure_detail": turn.get("failure_detail"),
+        "started_at": turn["started_at"],
+        "updated_at": turn["updated_at"],
+        "resolved_at": turn.get("resolved_at"),
+        "duration_ms": trace.get("duration_ms"),
+        "provider_requests": trace.get("provider_requests", 0),
+        "provider_usage": trace.get("provider_usage") or {},
+        "operation_count": len(operations),
+        "execution_stage": public_execution_stage(
+            turn_status=turn["status"],
+            participants=request_payload.get("participants") or [],
+            operations=operations,
+        ),
+    }
+
+
+@app.get("/api/chat-turns/{project_id}")
+def chat_turns(project_id: str, limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+    try:
+        turns = storage.list_chat_turns(project_id, limit=limit)
+        operations_by_turn = storage.list_turn_operations_for_turns(
+            [turn["id"] for turn in turns]
+        )
+        return [
+            _public_chat_turn(turn, operations_by_turn.get(turn["id"], []))
+            for turn in turns
+        ]
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/chat-turns/{project_id}/{turn_id}/accept")
+def accept_partial_chat_turn(project_id: str, turn_id: str) -> dict:
+    try:
+        turn = storage.get_chat_turn(turn_id)
+        if turn["project_id"] != project_id:
+            raise StorageError("Chat turn not found.")
+        return _public_chat_turn(storage.resolve_chat_turn(turn_id, "accepted_partial"))
+    except ChatTurnConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/chat")
 async def chat(payload: ChatRequest, request: Request) -> dict:
     runtime = _require_runtime_config()
@@ -413,6 +373,46 @@ async def chat(payload: ChatRequest, request: Request) -> dict:
 async def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
     runtime = _require_runtime_config()
 
+    async def execute(report) -> dict:
+        return await _execute_chat_turn(
+            payload,
+            runtime,
+            progress_callback=report,
+        )
+
+    return _chat_stream_response(request, execute)
+
+
+@app.post("/api/chat-turns/{project_id}/{turn_id}/resume/stream")
+async def resume_chat_stream(
+    project_id: str,
+    turn_id: str,
+    request: Request,
+) -> StreamingResponse:
+    runtime = _require_runtime_config()
+    try:
+        turn = storage.get_chat_turn(turn_id)
+        if turn["project_id"] != project_id or not turn.get("request"):
+            raise StorageError("Chat turn not found.")
+        payload = ChatRequest.model_validate(turn["request"])
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async def execute(report) -> dict:
+        return await turn_service.execute(
+            payload,
+            runtime,
+            report,
+            resume=True,
+        )
+
+    return _chat_stream_response(request, execute)
+
+
+def _chat_stream_response(
+    request: Request,
+    execute: Callable[[Callable[[dict], Awaitable[None]]], Awaitable[dict]],
+) -> StreamingResponse:
     async def event_stream():
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
@@ -422,11 +422,7 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
         async def run_chat() -> None:
             try:
                 async with request.app.state.chat_lock:
-                    result = await _execute_chat_turn(
-                        payload,
-                        runtime,
-                        progress_callback=report,
-                    )
+                    result = await execute(report)
                 await queue.put({"type": "result", **result})
             except ChatTurnStateError as exc:
                 await queue.put({"type": "error", "detail": str(exc), "status": 409})
@@ -517,14 +513,18 @@ def memory_loop_data(
         events = storage.list_memory_events(project_id, agent_id, limit=limit)
         stats = storage.memory_stats(project_id).get(
             agent_id,
-            {"agent_id": agent_id, "event_count": 0, "action_count": 0, "failure_count": 0, "latest_sequence": 0},
+            {
+                "agent_id": agent_id,
+                "event_count": 0,
+                "action_count": 0,
+                "failure_count": 0,
+                "latest_sequence": 0,
+            },
         )
         global_events = storage.list_global_memory_events(
             agent_id, exclude_project_id=project_id, limit=limit
         )
-        global_stats = storage.global_memory_stats(
-            agent_id, exclude_project_id=project_id
-        )
+        global_stats = storage.global_memory_stats(agent_id, exclude_project_id=project_id)
         return {
             "agent_id": agent_id,
             "definition": definition,
@@ -614,17 +614,13 @@ def download_project_file(project_id: str, path: str = Query(min_length=1)) -> F
 @app.put("/api/files/{project_id}/sharing")
 def update_project_file_sharing(project_id: str, payload: FileSharingUpdate) -> dict:
     try:
-        return file_tools.set_agent_sharing(
-            project_id, payload.path, payload.shared_agent_edit
-        )
+        return file_tools.set_agent_sharing(project_id, payload.path, payload.shared_agent_edit)
     except (FileToolError, StorageError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/code-runs/{project_id}")
-async def run_project_code(
-    project_id: str, payload: CodeRunRequest, request: Request
-) -> dict:
+async def run_project_code(project_id: str, payload: CodeRunRequest, request: Request) -> dict:
     try:
         session = code_run_coordinator.create_session(project_id, payload)
     except CodeRunValidationError as exc:

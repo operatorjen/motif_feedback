@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -12,7 +12,7 @@ from .agent_tools import AgentToolExecutor, ToolContext
 from .config import Settings
 from .constants import PROVIDER_ERROR_DETAIL_MAX_CHARS
 from .provider_catalog import ProviderRegistry
-from .tool_metadata import public_tool_arguments
+from .tool_metadata import public_tool_arguments, tool_request_fingerprint
 
 PROVIDER_TIMEOUT_STATUS_CODES = {408, 504, 524}
 
@@ -85,21 +85,16 @@ class DirectProviderClient:
     ) -> AgentCompletion:
         options = self._provider_options(provider)
         if options is None:
-            raise ProviderError(
-                f"Provider {provider!r} is not enabled in the provider catalog."
-            )
+            raise ProviderError(f"Provider {provider!r} is not enabled in the provider catalog.")
         label = str(options["label"])
         key = self._provider_api_key(provider)
         if options["api_key_required"] and not key:
             key_env = str(options.get("api_key_env") or "the configured variable")
             raise ProviderError(
-                f"{label} API key is missing. Add {key_env} to .env and restart "
-                "the container."
+                f"{label} API key is missing. Add {key_env} to .env and restart the container."
             )
         if not model:
-            raise ProviderError(
-                f"No direct {label} model ID is configured for this agent."
-            )
+            raise ProviderError(f"No direct {label} model ID is configured for this agent.")
         if enable_web_search and options.get("web_search_mode") != "responses":
             raise ProviderError(f"{label} does not declare a compatible web-search capability.")
         if enable_web_search:
@@ -204,10 +199,7 @@ class DirectProviderClient:
 
     def supports_web_search(self, provider: str) -> bool:
         options = self._provider_options(provider)
-        return bool(
-            options
-            and options.get("web_search_mode") == "responses"
-        )
+        return bool(options and options.get("web_search_mode") == "responses")
 
     async def _run_search_agent(
         self,
@@ -254,9 +246,7 @@ class DirectProviderClient:
                 text = self._normalize_content(part.get("text"))
                 if text:
                     content_parts.append(text)
-                annotations.extend(
-                    self._normalize_search_annotations(part.get("annotations"))
-                )
+                annotations.extend(self._normalize_search_annotations(part.get("annotations")))
         if not content_parts:
             output_text = self._normalize_content(response_data.get("output_text"))
             if output_text:
@@ -394,9 +384,7 @@ class DirectProviderClient:
             return None, participation_retries
         if require_participation and (not content or declined):
             successful_actions = [
-                event
-                for event in tool_events
-                if event.get("result", {}).get("ok") is not False
+                event for event in tool_events if event.get("result", {}).get("ok") is not False
             ]
             if successful_actions:
                 return (
@@ -443,16 +431,29 @@ class DirectProviderClient:
                 "tool_calls": tool_calls,
             }
         )
-        for call in tool_calls:
+        for call_index, call in enumerate(tool_calls):
             call_id = call.get("id") or f"tool-{round_index}-{len(tool_events)}"
             function = call.get("function") or {}
             name = function.get("name", "")
             arguments: dict[str, Any] = {}
             try:
-                arguments = self.tool_executor.parse_arguments(
-                    function.get("arguments", "{}")
+                arguments = self.tool_executor.parse_arguments(function.get("arguments", "{}"))
+                operation_context = tool_context
+                if tool_context.turn_id:
+                    argument_hash = tool_request_fingerprint(name, arguments)[:16]
+                    operation_context = replace(
+                        tool_context,
+                        operation_id=(
+                            f"{tool_context.turn_id}:{tool_context.agent_id}:"
+                            f"{tool_context.turn_beat}:tool:{round_index + 1}:"
+                            f"{call_index + 1}:{argument_hash}"
+                        ),
+                    )
+                result = self.tool_executor.execute(
+                    name,
+                    arguments,
+                    operation_context,
                 )
-                result = self.tool_executor.execute(name, arguments, tool_context)
             except ValueError as exc:
                 result = {
                     "ok": False,
@@ -489,7 +490,8 @@ class DirectProviderClient:
         if name == "search_project_files" and isinstance(public.get("results"), list):
             public["results"] = [
                 {key: item[key] for key in ("path", "score") if key in item}
-                for item in public["results"] if isinstance(item, dict)
+                for item in public["results"]
+                if isinstance(item, dict)
             ]
         return public
 
@@ -602,9 +604,7 @@ class DirectProviderClient:
             "enabled": True,
             "api_key_env": f"{provider.upper()}_API_KEY",
             "api_key_required": True,
-            "token_parameter": (
-                "max_completion_tokens" if is_openai else "max_tokens"
-            ),
+            "token_parameter": ("max_completion_tokens" if is_openai else "max_tokens"),
             "supports_temperature": not is_openai,
             "supports_tools": True,
             "reasoning_effort": "none" if is_openai else None,
@@ -627,11 +627,12 @@ class DirectProviderClient:
     def _format_error_detail(payload: dict[str, Any], fallback: str) -> str:
         error = payload.get("error") if isinstance(payload, dict) else None
         if isinstance(error, dict):
-            parts = [str(error.get(key)) for key in ("message", "type", "code", "param") if error.get(key) not in (None, "")]
-            return (
-                " / ".join(dict.fromkeys(parts))[:PROVIDER_ERROR_DETAIL_MAX_CHARS]
-                or fallback
-            )
+            parts = [
+                str(error.get(key))
+                for key in ("message", "type", "code", "param")
+                if error.get(key) not in (None, "")
+            ]
+            return " / ".join(dict.fromkeys(parts))[:PROVIDER_ERROR_DETAIL_MAX_CHARS] or fallback
         if error not in (None, ""):
             return str(error)[:PROVIDER_ERROR_DETAIL_MAX_CHARS]
         return fallback[:PROVIDER_ERROR_DETAIL_MAX_CHARS]

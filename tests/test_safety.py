@@ -6,6 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from app.agent_tools import AgentToolExecutor, ToolContext
 from app.config import RuntimeNotConfiguredError, Settings
 from app.file_tools import FileToolError, ProjectFileTools
 from app.models import RuntimeConfig
@@ -245,6 +246,125 @@ def test_chat_turns_are_idempotent_and_mark_stale_runs_interrupted(tmp_path: Pat
     assert reloaded.get_chat_turn("turn-67890")["status"] == "interrupted"
 
 
+def test_memory_search_can_recover_relevant_older_events(tmp_path: Path):
+    _, storage, _, _ = make_services(tmp_path)
+    project = storage.create_project("Searchable memory")
+    relevant = storage.add_memory_event(
+        project["id"],
+        "agent_a",
+        "user-old",
+        outcome="response",
+        trigger_text="How does the copper resonance motif recur?",
+        return_text="The copper resonance returns through the threshold.",
+        actions=[],
+        provider="test",
+        model="test",
+    )
+    storage.add_global_memory_event(
+        agent_id="agent_a",
+        source_project_id=project["id"],
+        source_project_name=project["name"],
+        source_memory_event_id=relevant["id"],
+        trigger_text=relevant["trigger_text"],
+        return_text=relevant["return_text"],
+        actions=[],
+    )
+    for index in range(12):
+        storage.add_memory_event(
+            project["id"],
+            "agent_a",
+            f"user-{index}",
+            outcome="response",
+            trigger_text=f"Unrelated recent topic {index}",
+            return_text="No matching vocabulary here.",
+            actions=[],
+            provider="test",
+            model="test",
+        )
+
+    matches = storage.search_memory_events(
+        project["id"],
+        "agent_a",
+        "copper resonance",
+        limit=3,
+    )
+
+    assert matches[0]["id"] == relevant["id"]
+    global_matches = storage.search_global_memory_context_events(
+        "agent_a",
+        "copper resonance",
+        exclude_project_id="another-project",
+        limit=3,
+    )
+    assert global_matches[0]["source_memory_event_id"] == relevant["id"]
+
+
+def test_turn_trace_retention_is_disabled_by_default_and_prunes_diagnostics_only(
+    tmp_path: Path,
+):
+    _, storage, _, _ = make_services(tmp_path)
+    project = storage.create_project("Trace retention")
+    storage.begin_chat_turn(
+        "turn-retention-123",
+        project["id"],
+        "fingerprint",
+        request={"message": "retained"},
+        runtime={"providers": {}},
+    )
+    storage.complete_chat_turn(
+        "turn-retention-123",
+        {"messages": [{"id": "message-1"}]},
+        {"duration_ms": 10, "events": [{"type": "turn_complete"}]},
+    )
+    with storage.connection() as connection:
+        connection.execute(
+            """
+            UPDATE chat_turns SET updated_at = '2000-01-01T00:00:00+00:00'
+            WHERE id = 'turn-retention-123'
+            """
+        )
+
+    assert storage.prune_chat_turn_traces(0) == 0
+    assert storage.get_chat_turn("turn-retention-123")["trace"]["duration_ms"] == 10
+    assert storage.prune_chat_turn_traces(30) == 1
+    turn = storage.get_chat_turn("turn-retention-123")
+    assert turn["trace"] == {}
+    assert turn["result"]["messages"] == [{"id": "message-1"}]
+
+
+def test_state_changing_tool_operation_is_not_executed_twice(tmp_path: Path):
+    _, storage, personas, tools = make_services(tmp_path)
+    project = storage.create_project("Tool idempotency")
+    storage.begin_chat_turn(
+        "turn-tool-123",
+        project["id"],
+        "fingerprint",
+        request={"message": "write once"},
+        runtime={"providers": {}},
+    )
+    executor = AgentToolExecutor(tools, personas)
+    context = ToolContext(
+        agent_id="agent_a",
+        project_id=project["id"],
+        turn_id="turn-tool-123",
+        turn_beat=1,
+        operation_id="turn-tool-123:agent_a:1:tool:1:1:stable",
+    )
+    arguments = {"path": "artifact.md", "content": "original result"}
+
+    first = executor.execute("write_project_file", arguments, context)
+    artifact = tools.project_root(project["id"]) / "artifact.md"
+    artifact.write_text("external later change", encoding="utf-8")
+    second = executor.execute("write_project_file", arguments, context)
+
+    assert second == first
+    assert artifact.read_text(encoding="utf-8") == "external later change"
+    operations = storage.list_turn_operations("turn-tool-123")
+    assert [(item["operation_type"], item["status"]) for item in operations] == [
+        ("tool:write_project_file", "completed")
+    ]
+
+
 def test_project_file_search_returns_the_best_matches_not_the_first_matches(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Ranked search")
@@ -263,9 +383,7 @@ def test_project_file_search_returns_the_best_matches_not_the_first_matches(tmp_
 
     results = tools.search_files(project["id"], "motif", max_results=1)
 
-    assert [(result["path"], result["score"]) for result in results] == [
-        ("z-high.md", 4)
-    ]
+    assert [(result["path"], result["score"]) for result in results] == [("z-high.md", 4)]
 
 
 def test_project_files_cannot_escape_workspace(tmp_path: Path):
@@ -280,9 +398,7 @@ def test_project_files_cannot_escape_workspace(tmp_path: Path):
 def test_agent_can_edit_own_file_without_turn_permission(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Overwrite")
-    tools.write_file(
-        project["id"], "note.md", "first", actor_type="agent", actor_id="agent_a"
-    )
+    tools.write_file(project["id"], "note.md", "first", actor_type="agent", actor_id="agent_a")
     result = tools.write_file(
         project["id"], "note.md", "second", actor_type="agent", actor_id="agent_a"
     )
@@ -299,8 +415,11 @@ def test_agent_file_limit_requires_consolidation(tmp_path: Path):
 
     with pytest.raises(FileToolError) as failure:
         tools.write_file(
-            project["id"], "journal.md", "x" * 15001,
-            actor_type="agent", actor_id="agent_a",
+            project["id"],
+            "journal.md",
+            "x" * 15001,
+            actor_type="agent",
+            actor_id="agent_a",
         )
 
     assert failure.value.code == "agent_file_size_limit"
@@ -355,8 +474,11 @@ def test_agent_can_create_safe_svg_but_not_active_svg(tmp_path: Path):
     assert media_type == "image/svg+xml"
     with pytest.raises(FileToolError):
         tools.write_file(
-            project["id"], "active.svg", '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
-            actor_type="agent", actor_id="agent_a",
+            project["id"],
+            "active.svg",
+            '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+            actor_type="agent",
+            actor_id="agent_a",
         )
 
 
@@ -364,12 +486,19 @@ def test_code_files_are_labeled_for_editor_preview(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Code artifacts")
     tools.write_file(
-        project["id"], "sample.py", "def example():\n    return 1",
-        actor_type="agent", actor_id="agent_b",
+        project["id"],
+        "sample.py",
+        "def example():\n    return 1",
+        actor_type="agent",
+        actor_id="agent_b",
     )
 
     assert tools.list_files(project["id"])[0]["kind"] == "code"
-    assert tools.download_path(project["id"], "sample.py").read_text(encoding="utf-8").startswith("def example")
+    assert (
+        tools.download_path(project["id"], "sample.py")
+        .read_text(encoding="utf-8")
+        .startswith("def example")
+    )
 
 
 def test_runtime_artifacts_are_hidden_from_project_file_list(tmp_path: Path):
@@ -397,9 +526,7 @@ def test_download_path_remains_confined_to_the_project(tmp_path: Path):
 def test_agent_cannot_edit_another_owners_file(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Ownership")
-    tools.write_file(
-        project["id"], "agent-a.md", "first", actor_type="agent", actor_id="agent_a"
-    )
+    tools.write_file(project["id"], "agent-a.md", "first", actor_type="agent", actor_id="agent_a")
     with pytest.raises(FileToolError):
         tools.write_file(
             project["id"], "agent-a.md", "changed", actor_type="agent", actor_id="agent_b"
@@ -415,18 +542,27 @@ def test_user_can_share_one_agent_file_without_transferring_ownership(tmp_path: 
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Shared artifact")
     tools.write_file(
-        project["id"], "shared.md", "created by A",
-        actor_type="agent", actor_id="agent_a",
+        project["id"],
+        "shared.md",
+        "created by A",
+        actor_type="agent",
+        actor_id="agent_a",
     )
     tools.write_file(
-        project["id"], "private.md", "also created by A",
-        actor_type="agent", actor_id="agent_a",
+        project["id"],
+        "private.md",
+        "also created by A",
+        actor_type="agent",
+        actor_id="agent_a",
     )
 
     permission = tools.set_agent_sharing(project["id"], "shared.md", True)
     result = tools.write_file(
-        project["id"], "shared.md", "revised by B",
-        actor_type="agent", actor_id="agent_b",
+        project["id"],
+        "shared.md",
+        "revised by B",
+        actor_type="agent",
+        actor_id="agent_b",
     )
 
     assert permission["shared_agent_edit"] is True
@@ -436,8 +572,11 @@ def test_user_can_share_one_agent_file_without_transferring_ownership(tmp_path: 
     assert tools.read_file(project["id"], "shared.md")["content"] == "revised by B"
     with pytest.raises(FileToolError):
         tools.write_file(
-            project["id"], "private.md", "B should not edit this",
-            actor_type="agent", actor_id="agent_b",
+            project["id"],
+            "private.md",
+            "B should not edit this",
+            actor_type="agent",
+            actor_id="agent_b",
         )
 
 
@@ -445,16 +584,22 @@ def test_revoking_shared_editing_restores_creator_only_rule(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Revoked sharing")
     tools.write_file(
-        project["id"], "draft.md", "owner copy",
-        actor_type="agent", actor_id="agent_a",
+        project["id"],
+        "draft.md",
+        "owner copy",
+        actor_type="agent",
+        actor_id="agent_a",
     )
     tools.set_agent_sharing(project["id"], "draft.md", True)
     tools.set_agent_sharing(project["id"], "draft.md", False)
 
     with pytest.raises(FileToolError):
         tools.write_file(
-            project["id"], "draft.md", "unauthorized revision",
-            actor_type="agent", actor_id="agent_c",
+            project["id"],
+            "draft.md",
+            "unauthorized revision",
+            actor_type="agent",
+            actor_id="agent_c",
         )
     assert storage.get_file_owner(project["id"], "draft.md")["shared_agent_edit"] == 0
 
@@ -549,6 +694,8 @@ def test_project_deletion_purges_files_conversations_sources_and_memory(tmp_path
         "memory_events": 1,
         "global_memory_events": 1,
         "web_sources": 1,
+        "chat_turns": 0,
+        "turn_operations": 0,
     }
     assert not (storage.projects_root / target["id"]).exists()
     assert target["id"] not in {project["id"] for project in storage.list_projects()}
@@ -576,25 +723,48 @@ def test_agent_memory_loops_are_private_and_sequenced(tmp_path: Path):
     _, storage, _, _ = make_services(tmp_path)
     project = storage.create_project("Memory")
     storage.add_memory_event(
-        project["id"], "agent_a", "user-1", outcome="response",
-        trigger_text="first", return_text="embodied return", actions=[],
-        provider="gemini", model="gemini-test",
+        project["id"],
+        "agent_a",
+        "user-1",
+        outcome="response",
+        trigger_text="first",
+        return_text="embodied return",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
     )
     storage.add_memory_event(
-        project["id"], "agent_b", "user-1", outcome="action_response",
-        trigger_text="first", return_text="feedback return",
+        project["id"],
+        "agent_b",
+        "user-1",
+        outcome="action_response",
+        trigger_text="first",
+        return_text="feedback return",
         actions=[{"tool": "read_project_file", "path": "note.md", "ok": True}],
-        provider="deepseek", model="deepseek-test",
+        provider="deepseek",
+        model="deepseek-test",
     )
     storage.add_memory_event(
-        project["id"], "agent_a", "user-2", outcome="response",
-        trigger_text="second", return_text="second embodied return", actions=[],
-        provider="gemini", model="gemini-test",
+        project["id"],
+        "agent_a",
+        "user-2",
+        outcome="response",
+        trigger_text="second",
+        return_text="second embodied return",
+        actions=[],
+        provider="gemini",
+        model="gemini-test",
     )
     storage.add_memory_event(
-        project["id"], "agent_b", "user-2", outcome="provider_error",
-        trigger_text="second", return_text="provider unavailable", actions=[],
-        provider="deepseek", model="deepseek-test",
+        project["id"],
+        "agent_b",
+        "user-2",
+        outcome="provider_error",
+        trigger_text="second",
+        return_text="provider unavailable",
+        actions=[],
+        provider="deepseek",
+        model="deepseek-test",
     )
     agent_a = storage.list_memory_events(project["id"], "agent_a")
     assert [event["sequence"] for event in agent_a] == [2, 1]
@@ -659,10 +829,15 @@ def test_cross_project_memory_is_compact_provisional_and_source_labeled(tmp_path
     first = storage.create_project("First context")
     second = storage.create_project("Second context")
     local = storage.add_memory_event(
-        first["id"], "agent_a", "user-1", outcome="response",
-        trigger_text="trigger " * 100, return_text="begin " + ("return " * 200) + "end",
+        first["id"],
+        "agent_a",
+        "user-1",
+        outcome="response",
+        trigger_text="trigger " * 100,
+        return_text="begin " + ("return " * 200) + "end",
         actions=[{"tool": "read_project_file", "path": "note.md", "ok": True}],
-        provider="gemini", model="gemini-test",
+        provider="gemini",
+        model="gemini-test",
     )
     carried = storage.add_global_memory_event(
         agent_id="agent_a",
@@ -679,17 +854,15 @@ def test_cross_project_memory_is_compact_provisional_and_source_labeled(tmp_path
     assert len(carried["trigger_summary"]) <= 240
     assert len(carried["return_summary"]) <= 800
     assert carried["return_summary"].endswith("end")
-    assert storage.list_global_memory_events(
-        "agent_a", exclude_project_id=first["id"]
-    ) == []
+    assert storage.list_global_memory_events("agent_a", exclude_project_id=first["id"]) == []
     visible_elsewhere = storage.list_global_memory_events(
         "agent_a", exclude_project_id=second["id"]
     )
     assert [event["source_project_id"] for event in visible_elsewhere] == [first["id"]]
     assert storage.global_memory_stats("agent_a")["project_count"] == 1
-    assert storage.global_memory_stats(
-        "agent_a", exclude_project_id=first["id"]
-    )["event_count"] == 0
+    assert (
+        storage.global_memory_stats("agent_a", exclude_project_id=first["id"])["event_count"] == 0
+    )
 
 
 def test_global_memory_rejects_mismatched_source_provenance(tmp_path: Path):
@@ -950,9 +1123,7 @@ def test_relationship_memory_waits_for_repeated_evidence_and_candidates_accumula
         "eligible_for_user_incorporation": True,
         "automatic_application": False,
     }
-    assert personas.load_persona("agent_a")[
-        "relationship_memory"
-    ]["user"]["observations"] == []
+    assert personas.load_persona("agent_a")["relationship_memory"]["user"]["observations"] == []
 
     committed = personas.submit_update(
         {
@@ -971,9 +1142,9 @@ def test_relationship_memory_waits_for_repeated_evidence_and_candidates_accumula
     )
     assert committed["committed_change_count"] == 1
     assert personas.list_proposals() == []
-    assert personas.load_persona("agent_a")[
-        "relationship_memory"
-    ]["user"]["observations"] == [change["value"]]
+    assert personas.load_persona("agent_a")["relationship_memory"]["user"]["observations"] == [
+        change["value"]
+    ]
 
 
 def test_manual_persona_edit_incorporates_a_dormant_structural_candidate(
@@ -1015,9 +1186,7 @@ def test_manual_persona_edit_incorporates_a_dormant_structural_candidate(
         base_update,
         project_id=project["id"],
     )
-    first_path = (
-        personas.settings.proposals_root / first_result["proposal_path"]
-    )
+    first_path = personas.settings.proposals_root / first_result["proposal_path"]
     revised_update = {
         **base_update,
         "changes": [
@@ -1092,9 +1261,9 @@ def test_legacy_reflection_contract_is_left_untouched_but_not_loaded(tmp_path: P
     personas = PersonaStore(settings)
     personas.initialize()
 
-    assert (
-        settings.shared_root / "reflection_prompt.md"
-    ).read_text(encoding="utf-8") == old_contract
+    assert (settings.shared_root / "reflection_prompt.md").read_text(
+        encoding="utf-8"
+    ) == old_contract
     assert not hasattr(personas, "load_reflection_contract")
 
 
@@ -1148,9 +1317,7 @@ def test_storage_backfills_are_recorded_as_one_time_migrations(tmp_path: Path):
     with storage.connection() as connection:
         names = {
             row["name"]
-            for row in connection.execute(
-                "SELECT name FROM schema_migrations"
-            ).fetchall()
+            for row in connection.execute("SELECT name FROM schema_migrations").fetchall()
         }
     assert names == {
         "backfill_file_ownership_v1",

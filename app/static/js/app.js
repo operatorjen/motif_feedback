@@ -115,6 +115,7 @@ const elements = {
   newReturns: $("#new-returns"),
   sourceList: $("#source-list"),
   sourcePreview: $("#source-preview"),
+  turnList: $("#turn-list"),
   toast: $("#toast"),
 };
 
@@ -502,7 +503,7 @@ function renderMessage(message) {
     const citationCount = provenance.citations?.length || 0;
     const provider = [provenance.provider, provenance.model].filter(Boolean).join(" / ");
     const via = provider ? ` · VIA ${provider}` : "";
-    provenanceBox.textContent = `PROVENANCE: AGENT SEARCH AFTER DIRECT HTTP 403${via} · ${citationCount} CITATION${citationCount === 1 ? "" : "S"}`;
+    provenanceBox.textContent = `PROVENANCE: AGENT SEARCH AFTER RECOVERABLE DIRECT-READ FAILURE${via} · ${citationCount} CITATION${citationCount === 1 ? "" : "S"}`;
     article.append(provenanceBox);
   }
 
@@ -900,6 +901,134 @@ async function loadSources() {
   elements.sourceList.replaceChildren(fragment);
 }
 
+function formatTurnUsage(turn) {
+  const usage = turn.provider_usage || {};
+  const tokenCount = usage.total_tokens;
+  const duration = Number.isFinite(turn.duration_ms)
+    ? `${(turn.duration_ms / 1000).toFixed(1)}S`
+    : "—";
+  return `${duration} · ${turn.provider_requests || 0} PROVIDER REQUESTS`
+    + `${Number.isFinite(tokenCount) ? ` · ${tokenCount} TOKENS` : ""}`;
+}
+
+async function resumeTurn(turn) {
+  if (state.busy) {
+    showToast("The current room turn must finish before resuming another.", true);
+    return;
+  }
+  setBusy(true);
+  beginTurnProgress();
+  try {
+    const result = await streamApi(
+      `/api/chat-turns/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(turn.id)}/resume/stream`,
+      { method: "POST" },
+      updateTurnProgress,
+    );
+    if (!result) throw new Error("The server closed before returning a resumed result.");
+    updateResearchIndicator(result);
+    await Promise.all([
+      loadMessages(),
+      loadMemoryLoop(),
+      loadFiles(),
+      loadSources(),
+      loadProposals(),
+      loadTurns(),
+    ]);
+    renderAgentFailures(result.agent_failures || []);
+    showToast("Turn resumed from its stored progress.");
+  } catch (error) {
+    showToast(error.message, true);
+    await Promise.all([loadMessages(), loadTurns()]);
+  } finally {
+    state.progressNode?.remove();
+    state.progressNode = null;
+    setBusy(false);
+  }
+}
+
+async function acceptPartialTurn(turn) {
+  try {
+    await api(
+      `/api/chat-turns/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(turn.id)}/accept`,
+      { method: "POST" },
+    );
+    await loadTurns();
+    showToast("Partial turn accepted.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function loadTurns() {
+  const turns = await api(
+    `/api/chat-turns/${encodeURIComponent(state.currentProject)}`,
+  );
+  if (!turns.length) {
+    const empty = document.createElement("p");
+    empty.className = "microcopy";
+    empty.textContent = "No durable room turns have been recorded in this project.";
+    elements.turnList.replaceChildren(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const turn of turns) {
+    const row = document.createElement("article");
+    row.className = "turn-row";
+    const head = document.createElement("div");
+    head.className = "turn-row-head";
+    const status = document.createElement("strong");
+    status.textContent = (turn.resolution || turn.status).replaceAll("_", " ").toUpperCase();
+    const date = document.createElement("small");
+    date.textContent = new Date(turn.started_at).toLocaleString();
+    head.append(status, date);
+    const message = document.createElement("p");
+    message.textContent = turn.message || "Older turn without a stored request.";
+    const metrics = document.createElement("small");
+    metrics.textContent = formatTurnUsage(turn);
+    row.append(head, message, metrics);
+    if (turn.execution_stage && turn.status !== "completed") {
+      const stage = document.createElement("small");
+      const agentName = agentMeta[turn.execution_stage.agent_id]?.name
+        || turn.execution_stage.agent_id;
+      const operationLabels = {
+        provider_completion: "MODEL RESPONSE",
+        message_committed: "MESSAGE SAVE",
+        memory_committed: "MEMORY SAVE",
+        beat_finished: "RESPONSE BEAT",
+        agent_finished: "AGENT TURN",
+      };
+      const operation = turn.execution_stage.operation.startsWith("tool:")
+        ? "PROJECT ACTION"
+        : operationLabels[turn.execution_stage.operation]
+          || turn.execution_stage.operation.replaceAll("_", " ").toUpperCase();
+      stage.textContent = `${agentName} · BEAT ${turn.execution_stage.turn_beat} · ${operation} · ${turn.execution_stage.status}`;
+      row.append(stage);
+    }
+    if (turn.failure_detail) {
+      const failure = document.createElement("small");
+      failure.textContent = turn.failure_detail;
+      row.append(failure);
+    }
+    if (turn.resumable) {
+      const actions = document.createElement("div");
+      actions.className = "turn-row-actions";
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.textContent = "RESUME";
+      resume.addEventListener("click", () => resumeTurn(turn));
+      const accept = document.createElement("button");
+      accept.type = "button";
+      accept.className = "secondary";
+      accept.textContent = "ACCEPT PARTIAL";
+      accept.addEventListener("click", () => acceptPartialTurn(turn));
+      actions.append(resume, accept);
+      row.append(actions);
+    }
+    fragment.append(row);
+  }
+  elements.turnList.replaceChildren(fragment);
+}
+
 async function loadPersona() {
   const data = await api(`/api/personas/${state.currentPersona}`);
   elements.personaEditor.value = data.yaml_text;
@@ -1148,6 +1277,7 @@ async function initialize() {
       loadSources(),
       loadProposals(),
       loadProviderCatalog(),
+      loadTurns(),
     ]);
     setStatus("READY", "ok");
   } catch (error) {
@@ -1175,11 +1305,11 @@ function activateTab(name) {
 
 $$(".tab").forEach((button) => button.addEventListener("click", async () => {
   activateTab(button.dataset.tab);
-  if (button.dataset.tab !== "setup") return;
   try {
-    await refreshSession();
+    if (button.dataset.tab === "setup") await refreshSession();
+    if (button.dataset.tab === "turns") await loadTurns();
   } catch (error) {
-    showToast(`Could not refresh provider status: ${error.message}`, true);
+    showToast(`Could not refresh ${button.dataset.tab}: ${error.message}`, true);
   }
 }));
 
@@ -1189,7 +1319,13 @@ elements.projectSelect.addEventListener("change", async () => {
   elements.filePreview.textContent = "Select a file.";
   elements.sourcePreview.textContent = "Select a source.";
   try {
-    await Promise.all([loadMessages(), loadMemoryLoop(), loadFiles(), loadSources()]);
+    await Promise.all([
+      loadMessages(),
+      loadMemoryLoop(),
+      loadFiles(),
+      loadSources(),
+      loadTurns(),
+    ]);
     if (window.matchMedia(UI_DEFAULTS.narrowViewportQuery).matches) {
       document.querySelector(".room")?.scrollIntoView({ block: "start" });
     }
@@ -1208,7 +1344,13 @@ elements.createProject.addEventListener("click", async () => {
     state.currentProject = project.id;
     elements.newProjectName.value = "";
     renderProjects();
-    await Promise.all([loadMessages(), loadMemoryLoop(), loadFiles(), loadSources()]);
+    await Promise.all([
+      loadMessages(),
+      loadMemoryLoop(),
+      loadFiles(),
+      loadSources(),
+      loadTurns(),
+    ]);
     showToast("Project created.");
   } catch (error) {
     showToast(error.message, true);
@@ -1244,6 +1386,7 @@ elements.deleteProject.addEventListener("click", async () => {
       loadFiles(),
       loadSources(),
       loadProposals(),
+      loadTurns(),
     ]);
     showToast(`Deleted ${project.name} and all of its stored project data.`);
     elements.messageInput.focus({ preventScroll: true });
@@ -1313,6 +1456,7 @@ async function executeQueuedPrompt(turn) {
         loadFiles(),
         loadSources(),
         loadProposals(),
+        loadTurns(),
       ]);
       renderAgentFailures(result.agent_failures || []);
     } else {

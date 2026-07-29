@@ -4,11 +4,11 @@ Motif Feedback is a single-user localhost application for personal experimentati
 designed to authenticate or isolate multiple users, and it does not make arbitrary code
 risk-free.
 
-The design assumes that the local user, other local processes, Docker, the host kernel,
-application dependencies, and selected model-provider endpoints are trusted. Model output,
-project files, fetched pages, HTML demos, and user-approved Python code may be untrusted.
+The design trusts the local user, other local processes, Docker, the host kernel, application
+dependencies, and selected model-provider endpoints. Model output, project files, fetched pages,
+HTML demos, and user-approved Python code may be untrusted.
 
-## Core boundaries
+## Enforced boundaries
 
 ### Local application and containers
 
@@ -31,9 +31,9 @@ project files, fetched pages, HTML demos, and user-approved Python code may be u
   files and projects.
 - Agent tools expose no shell, package installer, Python executor, browser automation, desktop
   control, or Docker control.
-- Project files are data, not trusted instructions. Their contents can still attempt prompt
-  injection when an agent reads them. Tool confinement limits what a persuaded model can do, but
-  it does not guarantee that the model will ignore instructions embedded in a file.
+- Project files are untrusted model context and may contain prompt injection. Tool confinement
+  limits what a persuaded model can do; it does not guarantee that the model will ignore embedded
+  instructions.
 - Raster uploads receive basic filename-signature validation. SVG files reject scripts,
   embedded HTML, event handlers, and external references before storage and preview.
 
@@ -42,15 +42,15 @@ project files, fetched pages, HTML demos, and user-approved Python code may be u
 - Agents may write Python files but have no runner tool. In the interface, a run begins only when
   the local user selects one `.py` file and presses **RUN**.
 - The application sends a bounded text copy of the selected project to a separate runner over a
-  private Unix socket. The runner receives no database, provider keys, application environment,
-  Docker socket, or host-project mount.
+  private Unix socket. The runner receives no database, provider keys, Docker socket, application
+  environment, or host-project mount.
 - The runner uses `network_mode: none`, which provides no external Docker network attachment.
   Code cannot reach provider endpoints or public websites.
 - Python runs without a shell using a fixed isolated invocation, a disposable working copy, a
   minimal environment, and CPU, wall-clock, memory, process, file, descriptor, input, and output
   limits. Cancellation kills the process group and adopted descendants.
-- Standard input, stdout, and stderr are bounded. Submitted input and output may be retained in
-  the project conversation so agents can observe the result later.
+- Standard input, stdout, and stderr are bounded. Input and output may be retained in the project
+  conversation so agents can observe the result later.
 - A script may emit only fixed, validated conversational-attention signals. Script-authored
   observation text is retained for inspection but is not inserted into agent prompts.
 
@@ -68,17 +68,17 @@ microVM when code may be hostile or stronger isolation is required.
   80/443, can send one or two locally configured user-agent profiles but no application cookies
   or provider credentials, does not execute JavaScript, validates redirects, limits response size
   and time, and blocks local, private, reserved, link-local, and Docker-host destinations.
-- If every configured direct attempt returns HTTP 403 and research is enabled, the exact failed
-  URL may be included in one selected agent request with provider-native search enabled. This
-  sends the URL and related prompt context to the selected provider and its search infrastructure.
-  Providers without a declared compatible search mode are not asked to search.
+- If direct reading fails with a recoverable anti-bot, rate-limit, server, timeout, DNS, or
+  script-only/no-readable-text outcome and research is enabled, the exact URL may be sent to one
+  selected provider with native search enabled. Related prompt context is sent with it. Unsafe
+  destinations, unsupported content types, ordinary not-found responses, and providers without a
+  declared compatible search mode are not escalated.
 - Provider search output is usable evidence only when it includes at least one returned URL
   citation. If no direct snapshot and no cited search evidence are available, ordinary agent turns
   are skipped and uncited search text is not persisted as an agent response.
-- Direct snapshots and search-derived answers remain distinct. Stored provenance identifies the
-  direct retrieval method and attempt count or, for search fallback, the provider/model, failed
-  URL/status, and provider-returned citations. A citation does not prove that the provider opened
-  the original page; agents are instructed to disclose substitute evidence.
+- Direct snapshots and search-derived answers remain distinct. Provenance records direct attempts
+  separately from the search provider, failed URL/status, and returned citations. A citation does
+  not prove that the provider opened the original page; agents must disclose substitute evidence.
 - Fetched page text is marked as untrusted evidence in agent prompts. Prompt injection is still
   possible at the model level, including through provider search results. DNS and URL checks
   reduce SSRF risk for direct retrieval but are not a substitute for an outbound proxy or
@@ -95,8 +95,8 @@ microVM when code may be hostile or stronger isolation is required.
   incorporates one into active identity. No agent consensus or voting process applies changes.
 - Detailed memory remains project-local. Compact, provenance-labeled continuity summaries from
   successful turns may be supplied to the same agent in another project. Raw beat records remain
-  available for inspection; prompt preparation groups beats from one agent turn and favors
-  relevant records without repeating exchanges already present in the room transcript.
+  inspectable; prompt preparation groups related beats and avoids repeating exchanges already in
+  the room transcript.
 - The interface asks for confirmation before deleting a file or project, but confirmation is a
   browser safeguard rather than a separate server authorization step. Deletion requests still
   require the session token.
@@ -114,20 +114,40 @@ microVM when code may be hostile or stronger isolation is required.
   content used in the turn. Custom and local-network endpoints receive the same material.
 - Provider responses and tool-call loops are bounded. Provider requests ignore proxy variables,
   and stored public tool-event metadata omits generated file, source, YAML, and Markdown bodies.
+- A room has independent elapsed-time and provider-request ceilings. These are high enough not to
+  alter the intended sequential three-agent flow, but stop retries or future orchestration changes
+  from creating an unbounded outbound request chain.
+
+### Turn lifecycle and retained diagnostics
+
 - When a streaming browser response closes before a room turn completes, the unfinished
-  provider task is canceled and awaited so it does not continue as detached background work.
-  The started turn is marked interrupted; any agent messages committed before interruption
-  remain part of the conversation rather than being rolled back.
+  provider task is canceled and awaited rather than left as detached background work. The turn is
+  marked interrupted; committed messages remain, and the retained request and non-secret runtime
+  selection allow the user to resume unfinished work or accept the result as partial.
+- Durable per-agent checkpoints distinguish provider completion, message commit, memory commit,
+  response-beat completion, and agent completion. Checkpointed provider results retain normalized
+  response text, citations, public tool events, continuation state, and reported usage, but not
+  the provider's raw response body. Message or memory persistence can therefore resume without
+  issuing the provider request again.
+- State-changing tool calls use deterministic operation identifiers. Completed results are
+  replayed rather than executed twice. A matching file left by an interrupted write can be
+  recognized by its content hash. Because persona state spans atomic files and history records,
+  an interrupted persona update is reported for manual inspection instead of being repeated.
 - Prompts submitted during an active room turn wait in a bounded in-memory browser queue. They are
   sent to the server sequentially and are not written to browser storage. Reloading or closing the
   tab discards prompts that have not started.
 - A prompt receives a unique turn identifier when it enters the browser queue. Once that prompt
-  starts, its request fingerprint, lifecycle, completed result, bounded progress timings, provider
-  and model labels, URLs involved in retrieval, and provider-reported token counts may be retained
-  in SQLite. Reusing a completed identifier replays its stored result; reusing the identifier for
-  different content is rejected. Trace records omit prompt text, response bodies, tool arguments,
-  file contents, and source text, although the completed result duplicates messages already stored
-  in the conversation.
+  starts, SQLite may retain its validated request, non-secret runtime selection, lifecycle,
+  completed result, bounded progress timings, provider/model labels, retrieval URLs, and
+  provider-reported token counts. Reusing a completed identifier replays the stored result;
+  attaching it to different content is rejected. Diagnostic traces omit prompt text, response
+  bodies, tool arguments, file contents, and source text, although the completed replay result
+  duplicates messages already stored in the conversation.
+- The TURNS inspector exposes operational summaries, not raw prompt traces or tool arguments.
+  Resumption remains serialized behind the same room lock as a new turn. Trace retention is
+  unlimited by default; `TURN_TRACE_RETENTION_DAYS` can explicitly prune old completed or resolved
+  diagnostics and checkpoint payloads without deleting conversation messages or completed replay
+  results.
 
 ## What this does not protect against
 

@@ -6,6 +6,11 @@ import pytest
 
 from app.agent_tools import AgentToolExecutor, ToolContext
 from app.providers import DirectProviderClient, ProviderError, ProviderTimeout
+from app.tool_metadata import (
+    tool_changes_state,
+    tool_recovery_strategy,
+    tool_request_fingerprint,
+)
 
 
 class FakeToolExecutor:
@@ -259,6 +264,24 @@ def test_public_write_arguments_do_not_persist_generated_content():
         "path": "artifact.md",
         "content_bytes": len(b"private generated body"),
     }
+
+
+def test_tool_policy_uses_one_canonical_request_fingerprint():
+    first = tool_request_fingerprint(
+        "write_project_file",
+        {"path": "note.md", "content": "same"},
+    )
+    reordered = tool_request_fingerprint(
+        "write_project_file",
+        {"content": "same", "path": "note.md"},
+    )
+
+    assert first == reordered
+    assert tool_changes_state("write_project_file")
+    assert tool_changes_state("propose_persona_update")
+    assert not tool_changes_state("read_project_file")
+    assert tool_recovery_strategy("write_project_file") == "verify_content_hash"
+    assert tool_recovery_strategy("propose_persona_update") == "manual_review"
 
 
 def test_provider_response_body_is_bounded():

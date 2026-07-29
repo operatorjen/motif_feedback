@@ -8,6 +8,7 @@ import pytest
 from app.storage import Storage, StorageError
 from app.web_sources import (
     FetchedPage,
+    PageFetchError,
     UnsafeUrlError,
     WebPageFetcher,
     WebSourceService,
@@ -126,6 +127,78 @@ def test_403_can_try_a_second_locally_configured_user_agent():
     assert seen_user_agents == ["First local profile", "Second local profile"]
     assert page.content_text == "readable fallback"
     assert page.retrieval_attempts == 2
+
+
+@pytest.mark.parametrize(
+    ("status_code", "eligible"),
+    [(404, False), (429, True), (451, True), (503, True)],
+)
+def test_http_failures_classify_agent_search_recoverability(
+    status_code: int,
+    eligible: bool,
+):
+    async def resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    fetcher = WebPageFetcher(
+        fetch_settings(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(status_code, text="unavailable")
+        ),
+        resolver=resolver,
+    )
+
+    with pytest.raises(PageFetchError) as raised:
+        asyncio.run(fetcher.fetch("https://example.com/article"))
+
+    assert raised.value.status_code == status_code
+    assert raised.value.search_fallback_eligible is eligible
+
+
+def test_script_only_page_is_eligible_for_agent_search_fallback():
+    async def resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    fetcher = WebPageFetcher(
+        fetch_settings(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text="<html><script>renderApplication()</script></html>",
+            )
+        ),
+        resolver=resolver,
+    )
+
+    with pytest.raises(PageFetchError) as raised:
+        asyncio.run(fetcher.fetch("https://example.com/application"))
+
+    assert raised.value.reason == "no_readable_text"
+    assert raised.value.search_fallback_eligible is True
+
+
+def test_javascript_requirement_shell_is_eligible_for_agent_search_fallback():
+    async def resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    fetcher = WebPageFetcher(
+        fetch_settings(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text="<html><body>Please enable JavaScript to continue.</body></html>",
+            )
+        ),
+        resolver=resolver,
+    )
+
+    with pytest.raises(PageFetchError) as raised:
+        asyncio.run(fetcher.fetch("https://example.com/application"))
+
+    assert raised.value.reason == "javascript_required"
+    assert raised.value.search_fallback_eligible is True
 
 
 def test_redirect_to_private_destination_is_blocked():
