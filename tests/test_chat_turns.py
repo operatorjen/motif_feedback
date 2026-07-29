@@ -368,6 +368,70 @@ def test_turn_listing_batches_operation_diagnostics(tmp_path, monkeypatch):
     assert batch_calls == [["turn-batch-1", "turn-batch-0"]]
 
 
+def test_recovery_listing_returns_only_unresolved_resumable_turns(
+    tmp_path,
+    monkeypatch,
+):
+    storage = Storage(tmp_path / "state" / "motif.db", tmp_path / "projects")
+    storage.initialize()
+    request = {
+        "turn_id": "turn-recoverable",
+        "project_id": "general",
+        "message": "Resume this turn.",
+        "participants": ["agent_a"],
+        "research_mode": "off",
+    }
+    runtime = runtime_config().model_dump()
+
+    storage.begin_chat_turn(
+        "turn-completed",
+        "general",
+        "completed-fingerprint",
+        request={**request, "turn_id": "turn-completed"},
+        runtime=runtime,
+    )
+    storage.complete_chat_turn("turn-completed", {"messages": []}, {})
+    storage.begin_chat_turn(
+        "turn-recoverable",
+        "general",
+        "recoverable-fingerprint",
+        request=request,
+        runtime=runtime,
+    )
+    storage.fail_chat_turn(
+        "turn-recoverable",
+        status="interrupted",
+        detail="The process stopped.",
+        trace={},
+    )
+    storage.begin_chat_turn("turn-legacy", "general", "legacy-fingerprint")
+    storage.fail_chat_turn(
+        "turn-legacy",
+        status="failed",
+        detail="This older turn has no replay state.",
+        trace={},
+    )
+
+    monkeypatch.setattr(main_module, "storage", storage)
+
+    turns = main_module.chat_turns("general", resumable_only=True)
+
+    assert [turn["id"] for turn in turns] == ["turn-recoverable"]
+    assert turns[0]["resumable"] is True
+
+
+def test_turn_recovery_is_contextual_instead_of_an_inspector_tab():
+    root = main_module.STATIC_ROOT
+    html = (root / "index.html").read_text(encoding="utf-8")
+    javascript = (root / "js" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="turn-recovery"' in html
+    assert 'data-tab="turns"' not in html
+    assert 'id="tab-turns"' not in html
+    assert "resumable_only=true" in javascript
+    assert "loadTurnRecovery()" in javascript
+
+
 def test_shared_chat_stream_emits_progress_and_result_in_order():
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(chat_lock=asyncio.Lock()))

@@ -20,7 +20,7 @@ def public_execution_stage(
     participants: list[str],
     operations: list[dict],
 ) -> dict | None:
-    """Project durable operations into the TURNS inspector's current stage."""
+    """Project durable operations into the room recovery notice's current stage."""
     pending = next(
         (
             operation

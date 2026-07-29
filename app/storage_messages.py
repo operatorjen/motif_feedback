@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 
 from .constants import (
     DEFAULT_STORAGE_MESSAGE_LIMIT,
@@ -129,6 +130,32 @@ class MessageRepositoryMixin:
             ).fetchall()
         return [self._row_to_message(row) for row in rows]
 
+    def iter_conversation_messages(
+        self,
+        project_id: str,
+        *,
+        batch_size: int = 250,
+    ) -> Iterator[dict]:
+        """Yield every project message in durable chat order without a display limit."""
+        safe_batch_size = min(max(int(batch_size), 1), 1_000)
+        with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
+            cursor = connection.execute(
+                """
+                SELECT id, project_id, turn_id, role, agent_id, content,
+                       annotations_json, metadata_json, created_at
+                FROM messages
+                WHERE project_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (project_id,),
+            )
+            while rows := cursor.fetchmany(safe_batch_size):
+                for row in rows:
+                    message = self._row_to_message(row)
+                    message["turn_id"] = row["turn_id"]
+                    yield message
+
     def update_message_metadata(
         self,
         project_id: str,
@@ -199,4 +226,3 @@ class MessageRepositoryMixin:
             "metadata": json.loads(row["metadata_json"]),
             "created_at": row["created_at"],
         }
-

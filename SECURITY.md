@@ -143,11 +143,14 @@ microVM when code may be hostile or stronger isolation is required.
   attaching it to different content is rejected. Diagnostic traces omit prompt text, response
   bodies, tool arguments, file contents, and source text, although the completed replay result
   duplicates messages already stored in the conversation.
-- The TURNS inspector exposes operational summaries, not raw prompt traces or tool arguments.
-  Resumption remains serialized behind the same room lock as a new turn. Trace retention is
-  unlimited by default; `TURN_TRACE_RETENTION_DAYS` can explicitly prune old completed or resolved
-  diagnostics and checkpoint payloads without deleting conversation messages or completed replay
-  results.
+- The room exposes a recovery notice only for unresolved interrupted or failed turns. Its optional
+  technical details omit raw prompt traces and tool arguments. Resumption remains serialized
+  behind the same room lock as a new turn. Trace retention is unlimited by default;
+  `TURN_TRACE_RETENTION_DAYS` can explicitly prune old completed or resolved diagnostics and
+  checkpoint payloads without deleting conversation messages or completed replay results.
+- **DOWNLOAD LOG** returns every currently committed project message as a Markdown attachment.
+  The browser's download location is outside `workspace/` and is not managed or deleted by the
+  application.
 
 ## What this does not protect against
 

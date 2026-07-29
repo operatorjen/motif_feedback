@@ -177,6 +177,27 @@ class TurnRepositoryMixin:
             ).fetchall()
         return [self._row_to_chat_turn(row) for row in rows]
 
+    def list_recoverable_chat_turns(self, project_id: str) -> list[dict]:
+        """Return every unresolved turn that still has enough state to resume."""
+        with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
+            rows = connection.execute(
+                """
+                SELECT id, project_id, request_fingerprint, status, result_json,
+                       trace_json, failure_detail, request_json, runtime_json,
+                       resolution, resolved_at, started_at, updated_at
+                FROM chat_turns
+                WHERE project_id = ?
+                  AND status IN ('failed', 'interrupted')
+                  AND resolution IS NULL
+                  AND request_json IS NOT NULL
+                  AND runtime_json IS NOT NULL
+                ORDER BY started_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [self._row_to_chat_turn(row) for row in rows]
+
     def prune_chat_turn_traces(self, retention_days: int) -> int:
         """Prune diagnostics only when the operator explicitly configures retention."""
         if retention_days <= 0:

@@ -54,9 +54,11 @@ const elements = {
   createProject: $("#create-project"),
   deleteProject: $("#delete-project"),
   projectTitle: $("#project-title"),
+  downloadLog: $("#download-log"),
   researchMode: $("#research-mode"),
   researchIndicator: $("#research-indicator"),
   setupWarning: $("#setup-warning"),
+  turnRecovery: $("#turn-recovery"),
   messages: $("#messages"),
   composer: $("#composer"),
   messageInput: $("#message-input"),
@@ -115,7 +117,6 @@ const elements = {
   newReturns: $("#new-returns"),
   sourceList: $("#source-list"),
   sourcePreview: $("#source-preview"),
-  turnList: $("#turn-list"),
   toast: $("#toast"),
 };
 
@@ -190,6 +191,9 @@ function setBusy(busy) {
     || state.promptQueue.length > 0
     || !state.currentProject
   );
+  elements.turnRecovery.querySelectorAll("button").forEach((button) => {
+    button.disabled = busy;
+  });
   elements.sendButton.textContent = busy ? "QUEUE NEXT ↵" : "SEND ↵";
 }
 
@@ -280,6 +284,7 @@ function renderProjects() {
     || state.promptQueue.length > 0
     || !current
   );
+  elements.downloadLog.disabled = !current;
 }
 
 function renderAgentOptions() {
@@ -932,13 +937,13 @@ async function resumeTurn(turn) {
       loadFiles(),
       loadSources(),
       loadProposals(),
-      loadTurns(),
+      loadTurnRecovery(),
     ]);
     renderAgentFailures(result.agent_failures || []);
     showToast("Turn resumed from its stored progress.");
   } catch (error) {
     showToast(error.message, true);
-    await Promise.all([loadMessages(), loadTurns()]);
+    await Promise.all([loadMessages(), loadTurnRecovery()]);
   } finally {
     state.progressNode?.remove();
     state.progressNode = null;
@@ -947,35 +952,48 @@ async function resumeTurn(turn) {
 }
 
 async function acceptPartialTurn(turn) {
+  if (state.busy) {
+    showToast("The current room turn must finish before accepting another.", true);
+    return;
+  }
   try {
     await api(
       `/api/chat-turns/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(turn.id)}/accept`,
       { method: "POST" },
     );
-    await loadTurns();
+    await loadTurnRecovery();
     showToast("Partial turn accepted.");
   } catch (error) {
     showToast(error.message, true);
   }
 }
 
-async function loadTurns() {
+async function loadTurnRecovery() {
   const turns = await api(
-    `/api/chat-turns/${encodeURIComponent(state.currentProject)}`,
+    `/api/chat-turns/${encodeURIComponent(state.currentProject)}?resumable_only=true`,
   );
   if (!turns.length) {
-    const empty = document.createElement("p");
-    empty.className = "microcopy";
-    empty.textContent = "No durable room turns have been recorded in this project.";
-    elements.turnList.replaceChildren(empty);
+    elements.turnRecovery.replaceChildren();
+    elements.turnRecovery.classList.add("hidden");
     return;
   }
+
+  const heading = document.createElement("div");
+  heading.className = "turn-recovery-head";
+  const title = document.createElement("strong");
+  title.textContent = "ROOM TURN NEEDS ATTENTION";
+  const count = document.createElement("span");
+  count.textContent = `${turns.length} RECOVERABLE`;
+  heading.append(title, count);
+
+  const list = document.createElement("div");
+  list.className = "turn-recovery-list";
   const fragment = document.createDocumentFragment();
   for (const turn of turns) {
     const row = document.createElement("article");
-    row.className = "turn-row";
+    row.className = "turn-recovery-row";
     const head = document.createElement("div");
-    head.className = "turn-row-head";
+    head.className = "turn-recovery-row-head";
     const status = document.createElement("strong");
     status.textContent = (turn.resolution || turn.status).replaceAll("_", " ").toUpperCase();
     const date = document.createElement("small");
@@ -983,9 +1001,7 @@ async function loadTurns() {
     head.append(status, date);
     const message = document.createElement("p");
     message.textContent = turn.message || "Older turn without a stored request.";
-    const metrics = document.createElement("small");
-    metrics.textContent = formatTurnUsage(turn);
-    row.append(head, message, metrics);
+    row.append(head, message);
     if (turn.execution_stage && turn.status !== "completed") {
       const stage = document.createElement("small");
       const agentName = agentMeta[turn.execution_stage.agent_id]?.name
@@ -1009,24 +1025,34 @@ async function loadTurns() {
       failure.textContent = turn.failure_detail;
       row.append(failure);
     }
-    if (turn.resumable) {
-      const actions = document.createElement("div");
-      actions.className = "turn-row-actions";
-      const resume = document.createElement("button");
-      resume.type = "button";
-      resume.textContent = "RESUME";
-      resume.addEventListener("click", () => resumeTurn(turn));
-      const accept = document.createElement("button");
-      accept.type = "button";
-      accept.className = "secondary";
-      accept.textContent = "ACCEPT PARTIAL";
-      accept.addEventListener("click", () => acceptPartialTurn(turn));
-      actions.append(resume, accept);
-      row.append(actions);
-    }
+    const details = document.createElement("details");
+    const detailsLabel = document.createElement("summary");
+    detailsLabel.textContent = "TECHNICAL DETAILS";
+    const metrics = document.createElement("small");
+    metrics.textContent = formatTurnUsage(turn);
+    details.append(detailsLabel, metrics);
+    row.append(details);
+
+    const actions = document.createElement("div");
+    actions.className = "turn-recovery-actions";
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.textContent = "RESUME";
+    resume.disabled = state.busy;
+    resume.addEventListener("click", () => resumeTurn(turn));
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.className = "secondary";
+    accept.textContent = "ACCEPT PARTIAL";
+    accept.disabled = state.busy;
+    accept.addEventListener("click", () => acceptPartialTurn(turn));
+    actions.append(resume, accept);
+    row.append(actions);
     fragment.append(row);
   }
-  elements.turnList.replaceChildren(fragment);
+  list.append(fragment);
+  elements.turnRecovery.replaceChildren(heading, list);
+  elements.turnRecovery.classList.remove("hidden");
 }
 
 async function loadPersona() {
@@ -1277,7 +1303,7 @@ async function initialize() {
       loadSources(),
       loadProposals(),
       loadProviderCatalog(),
-      loadTurns(),
+      loadTurnRecovery(),
     ]);
     setStatus("READY", "ok");
   } catch (error) {
@@ -1307,7 +1333,6 @@ $$(".tab").forEach((button) => button.addEventListener("click", async () => {
   activateTab(button.dataset.tab);
   try {
     if (button.dataset.tab === "setup") await refreshSession();
-    if (button.dataset.tab === "turns") await loadTurns();
   } catch (error) {
     showToast(`Could not refresh ${button.dataset.tab}: ${error.message}`, true);
   }
@@ -1324,7 +1349,7 @@ elements.projectSelect.addEventListener("change", async () => {
       loadMemoryLoop(),
       loadFiles(),
       loadSources(),
-      loadTurns(),
+      loadTurnRecovery(),
     ]);
     if (window.matchMedia(UI_DEFAULTS.narrowViewportQuery).matches) {
       document.querySelector(".room")?.scrollIntoView({ block: "start" });
@@ -1333,6 +1358,23 @@ elements.projectSelect.addEventListener("change", async () => {
   } catch (error) {
     showToast(error.message, true);
   }
+});
+
+elements.downloadLog.addEventListener("click", () => {
+  const project = state.projects.find((item) => item.id === state.currentProject);
+  if (!project) {
+    showToast("Choose a project before downloading its conversation.", true);
+    return;
+  }
+  const download = document.createElement("a");
+  download.href = (
+    `/api/projects/${encodeURIComponent(project.id)}/conversation.md`
+  );
+  download.download = `motif-feedback-${project.id}-conversation.md`;
+  document.body.append(download);
+  download.click();
+  download.remove();
+  showToast("Conversation log download started.");
 });
 
 elements.createProject.addEventListener("click", async () => {
@@ -1349,7 +1391,7 @@ elements.createProject.addEventListener("click", async () => {
       loadMemoryLoop(),
       loadFiles(),
       loadSources(),
-      loadTurns(),
+      loadTurnRecovery(),
     ]);
     showToast("Project created.");
   } catch (error) {
@@ -1386,7 +1428,7 @@ elements.deleteProject.addEventListener("click", async () => {
       loadFiles(),
       loadSources(),
       loadProposals(),
-      loadTurns(),
+      loadTurnRecovery(),
     ]);
     showToast(`Deleted ${project.name} and all of its stored project data.`);
     elements.messageInput.focus({ preventScroll: true });
@@ -1456,7 +1498,7 @@ async function executeQueuedPrompt(turn) {
         loadFiles(),
         loadSources(),
         loadProposals(),
-        loadTurns(),
+        loadTurnRecovery(),
       ]);
       renderAgentFailures(result.agent_failures || []);
     } else {
@@ -1465,7 +1507,7 @@ async function executeQueuedPrompt(turn) {
   } catch (error) {
     showToast(error.message, true);
     if (state.currentProject === turn.projectId) {
-      await loadMessages();
+      await Promise.all([loadMessages(), loadTurnRecovery()]);
       renderRequestError(error.message);
     }
   } finally {

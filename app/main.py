@@ -25,6 +25,7 @@ from .constants import (
     MAX_PROJECT_MESSAGE_LIMIT,
     MAX_WEB_SOURCE_LIMIT,
 )
+from .conversation_export import conversation_export_filename, conversation_markdown
 from .execution_semantics import public_execution_stage
 from .file_tools import FileToolError, ProjectFileTools
 from .memory_loops import memory_loop_for
@@ -289,6 +290,33 @@ def project_messages(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/projects/{project_id}/conversation.md")
+def download_project_conversation(project_id: str) -> StreamingResponse:
+    try:
+        project = storage.get_project(project_id)
+        agent_names = {
+            summary["agent_id"]: summary["display_name"]
+            for summary in persona_store.list_summaries()
+        }
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StreamingResponse(
+        conversation_markdown(
+            project=project,
+            messages=storage.iter_conversation_messages(project_id),
+            agent_names=agent_names,
+            user_display_name=settings.user_display_name,
+        ),
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{conversation_export_filename(project_id)}"'
+            ),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 def _public_chat_turn(
     turn: dict,
     operations: list[dict] | None = None,
@@ -328,9 +356,17 @@ def _public_chat_turn(
 
 
 @app.get("/api/chat-turns/{project_id}")
-def chat_turns(project_id: str, limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+def chat_turns(
+    project_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    resumable_only: bool = False,
+) -> list[dict]:
     try:
-        turns = storage.list_chat_turns(project_id, limit=limit)
+        turns = (
+            storage.list_recoverable_chat_turns(project_id)
+            if resumable_only
+            else storage.list_chat_turns(project_id, limit=limit)
+        )
         operations_by_turn = storage.list_turn_operations_for_turns(
             [turn["id"] for turn in turns]
         )

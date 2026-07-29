@@ -87,14 +87,18 @@ and research mode and may be removed before it begins. The queue exists only in 
 browser tab, so reloading discards prompts that have not started.
 
 Once a prompt starts, the server records its turn identifier and lifecycle. Reusing a completed
-identifier returns the stored result instead of running the agents twice. The **TURNS** inspector
-shows status, duration, provider-request counts, provider-reported token use, and the current
-recovery stage.
+identifier returns the stored result instead of running the agents twice.
 
 An interrupted or failed turn can resume unfinished work or be explicitly accepted as partial.
+When recovery is available, a compact notice appears in the room with both actions and optional
+technical details; completed turns do not occupy the interface.
 Provider completion, message storage, memory storage, response-beat completion, and agent
 completion are checkpointed separately, so recovery starts at the first unfinished stage without
 duplicating committed messages or changing sequential room causality.
+
+**DOWNLOAD LOG** exports every stored message in the current project as a chronological Markdown
+file. Each message is a numbered block with its speaker, timestamp, turn and response beat when
+available, sources, and retrieval notes.
 
 ## Providers
 

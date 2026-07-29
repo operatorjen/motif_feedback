@@ -131,8 +131,8 @@ class TurnService:
                 if turn["status"] == "completed" and isinstance(turn["result"], dict):
                     return turn["result"]
                 raise ChatTurnStateError(
-                    "That room turn did not complete previously. Resume or accept its "
-                    "partial result in TURNS."
+                    "That room turn did not complete previously. Use the room recovery "
+                    "notice to resume it or accept its partial result."
                 )
 
         started = time.monotonic()
