@@ -291,6 +291,94 @@ class StorageSchemaMixin:
                 CREATE INDEX IF NOT EXISTS idx_motif_pattern_preferences_project_agent
                 ON motif_pattern_preferences(project_id, observer_agent_id, updated_at DESC);
 
+                CREATE TABLE IF NOT EXISTS agent_prompt_runs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    turn_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    turn_beat INTEGER NOT NULL,
+                    speaker_position INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_template_hash TEXT NOT NULL,
+                    persona_revision_hash TEXT NOT NULL,
+                    context_selector_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('prepared', 'completed', 'failed', 'discarded')
+                    ),
+                    message_id TEXT,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER,
+                    output_chars INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(turn_id, agent_id, turn_beat),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(turn_id) REFERENCES chat_turns(id) ON DELETE CASCADE,
+                    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE SET NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_prompt_runs_project_created
+                ON agent_prompt_runs(project_id, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_prompt_runs_agent_created
+                ON agent_prompt_runs(agent_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS context_exposures (
+                    id TEXT PRIMARY KEY,
+                    prompt_run_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    context_kind TEXT NOT NULL CHECK(
+                        context_kind IN (
+                            'recent_message', 'same_turn_message',
+                            'local_memory', 'global_memory',
+                            'own_motif', 'other_observer_motif',
+                            'pattern_checkpoint', 'web_source', 'role_signal'
+                        )
+                    ),
+                    source_id TEXT NOT NULL,
+                    source_project_id TEXT,
+                    prompt_section TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    selection_reason TEXT NOT NULL,
+                    source_version_hash TEXT NOT NULL,
+                    estimated_chars INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(prompt_run_id, context_kind, source_id, prompt_section),
+                    FOREIGN KEY(prompt_run_id) REFERENCES agent_prompt_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_context_exposures_run_kind
+                ON context_exposures(prompt_run_id, context_kind, rank);
+
+                CREATE INDEX IF NOT EXISTS idx_context_exposures_project_kind
+                ON context_exposures(project_id, context_kind, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS interaction_feedback_events (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    feedback_type TEXT NOT NULL CHECK(
+                        feedback_type IN (
+                            'useful_difference', 'repetitive',
+                            'off_lens', 'unsupported'
+                        )
+                    ),
+                    active INTEGER NOT NULL CHECK(active IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_feedback_message_created
+                ON interaction_feedback_events(message_id, created_at, id);
+
+                CREATE INDEX IF NOT EXISTS idx_feedback_project_type_created
+                ON interaction_feedback_events(project_id, feedback_type, created_at DESC);
+
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL

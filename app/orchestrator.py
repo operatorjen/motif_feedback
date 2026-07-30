@@ -179,7 +179,7 @@ class Orchestrator:
         source_context = self.prompt_builder._format_web_sources(web_sources)
         execution_ledger = ExecutionLedger(self.storage, request, runtime)
 
-        for agent_id in order:
+        for speaker_position, agent_id in enumerate(order, start=1):
             turn_status = await self.agent_turn_executor.run(
                 agent_id=agent_id,
                 request=request,
@@ -201,6 +201,7 @@ class Orchestrator:
                 agent_failures=agent_failures,
                 progress_callback=progress_callback,
                 execution_ledger=execution_ledger,
+                speaker_position=speaker_position,
             )
             if agent_id == search_fallback_agent:
                 if turn_status == "search_cited":

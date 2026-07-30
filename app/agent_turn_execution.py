@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .agent_tools import USER_TOOL_DEFINITIONS, ToolContext
-from .execution_ledger import ExecutionLedger
+from .execution_ledger import ExecutionLedger, stable_fingerprint
 from .memory_loops import memory_loop_for
 from .models import ChatRequest, RuntimeConfig
 from .motif_checkpoints import agent_pattern_checkpoints
@@ -23,6 +24,7 @@ from .providers import (
 from .search_router import SearchDecision
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+CONTEXT_SELECTOR_VERSION = "context-selector-v1"
 
 
 class AgentTurnExecutor:
@@ -66,6 +68,7 @@ class AgentTurnExecutor:
         agent_failures: list[dict],
         progress_callback: ProgressCallback | None,
         execution_ledger: ExecutionLedger,
+        speaker_position: int,
     ) -> str:
         persona = self.persona_store.load_persona(agent_id)
         display_name = persona.get("display_name", agent_id)
@@ -149,6 +152,30 @@ class AgentTurnExecutor:
             source_context=source_context,
         )
         tools = list(USER_TOOL_DEFINITIONS)
+        base_exposures = self._context_exposures(
+            project_id=request.project_id,
+            recent=agent_recent,
+            same_turn=turn_transcript,
+            memory_history=memory_history,
+            global_memory_history=global_memory_history,
+            motif_context=motif_context,
+            room_motif_context=room_motif_context,
+            pattern_checkpoints=pattern_checkpoints,
+            web_sources=web_sources,
+            role_signals=role_signals,
+        )
+        prompt_template_hash = self._prompt_template_hash()
+        persona_revision_hash = stable_fingerprint(persona)
+        prompt_run_id = self._record_prompt_run(
+            request=request,
+            runtime=runtime,
+            agent_id=agent_id,
+            turn_beat=1,
+            speaker_position=speaker_position,
+            prompt_template_hash=prompt_template_hash,
+            persona_revision_hash=persona_revision_hash,
+            exposures=base_exposures,
+        )
 
         try:
             completion = await self._completion_for_beat(
@@ -165,6 +192,7 @@ class AgentTurnExecutor:
                 user_message_id=user_message_id,
             )
         except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
+            self._finalize_prompt_run(prompt_run_id, status="failed")
             await self._record_provider_failure(
                 exc=exc,
                 agent_id=agent_id,
@@ -194,6 +222,12 @@ class AgentTurnExecutor:
         if web_search_enabled and not PromptBuilder._annotation_sources(
             completion.annotations
         ):
+            self._finalize_prompt_run(
+                prompt_run_id,
+                status="discarded",
+                provider_usage=completion.usage,
+                output_chars=len(completion.content),
+            )
             await record_search_evidence_failure(
                 source_failures=source_failures,
                 runtime=runtime,
@@ -224,6 +258,7 @@ class AgentTurnExecutor:
             ),
             turn_beat=1,
             execution_ledger=execution_ledger,
+            prompt_run_id=prompt_run_id,
         )
         visible_responses.append(stored)
         turn_transcript.append(stored)
@@ -250,6 +285,10 @@ class AgentTurnExecutor:
             agent_failures=agent_failures,
             progress_callback=progress_callback,
             execution_ledger=execution_ledger,
+            speaker_position=speaker_position,
+            prompt_template_hash=prompt_template_hash,
+            persona_revision_hash=persona_revision_hash,
+            base_exposures=base_exposures,
         )
         execution_ledger.mark_agent_finished(agent_id, final_beat)
         return "search_cited" if web_search_enabled else "completed"
@@ -409,6 +448,7 @@ class AgentTurnExecutor:
         research_provenance: dict[str, Any] | None,
         turn_beat: int,
         execution_ledger: ExecutionLedger,
+        prompt_run_id: str | None,
     ) -> dict:
         content = completion.content.strip()
         metadata = {
@@ -485,6 +525,13 @@ class AgentTurnExecutor:
             memory_event["id"],
         )
         execution_ledger.mark_beat_finished(agent_id, turn_beat)
+        self._finalize_prompt_run(
+            prompt_run_id,
+            status="completed",
+            message_id=stored["id"],
+            provider_usage=completion.usage,
+            output_chars=len(content),
+        )
         return stored
 
     async def _run_followup_beats(
@@ -505,6 +552,10 @@ class AgentTurnExecutor:
         agent_failures: list[dict],
         progress_callback: ProgressCallback | None,
         execution_ledger: ExecutionLedger,
+        speaker_position: int,
+        prompt_template_hash: str,
+        persona_revision_hash: str,
+        base_exposures: list[dict[str, Any]],
     ) -> int:
         beat_number = 1
         beat_messages = [
@@ -527,6 +578,25 @@ class AgentTurnExecutor:
                 *beat_messages,
                 {"role": "user", "content": followup_instruction},
             ]
+            followup_exposures = [
+                *base_exposures,
+                *self._message_exposures(
+                    turn_transcript,
+                    context_kind="same_turn_message",
+                    prompt_section="followup_turn_transcript",
+                    selection_reason="same_turn_sequence",
+                ),
+            ]
+            prompt_run_id = self._record_prompt_run(
+                request=request,
+                runtime=runtime,
+                agent_id=agent_id,
+                turn_beat=beat_number,
+                speaker_position=speaker_position,
+                prompt_template_hash=prompt_template_hash,
+                persona_revision_hash=persona_revision_hash,
+                exposures=followup_exposures,
+            )
             try:
                 completion = await self._completion_for_beat(
                     agent_id=agent_id,
@@ -542,6 +612,7 @@ class AgentTurnExecutor:
                     user_message_id=user_message_id,
                 )
             except (ProviderTimeout, ProviderNoResponse, ProviderError) as exc:
+                self._finalize_prompt_run(prompt_run_id, status="failed")
                 await self._record_provider_failure(
                     exc=exc,
                     agent_id=agent_id,
@@ -567,6 +638,7 @@ class AgentTurnExecutor:
                 research_provenance=None,
                 turn_beat=beat_number,
                 execution_ledger=execution_ledger,
+                prompt_run_id=prompt_run_id,
             )
             visible_responses.append(stored)
             turn_transcript.append(stored)
@@ -587,6 +659,214 @@ class AgentTurnExecutor:
                 progress_callback=progress_callback,
             )
         return beat_number
+
+    @staticmethod
+    def _prompt_template_hash() -> str:
+        return stable_fingerprint(
+            {
+                "system_prompt_builder": inspect.getsource(PromptBuilder._build_system_prompt),
+                "agent_message_builder": inspect.getsource(PromptBuilder._agent_messages),
+                "followup_builder": inspect.getsource(AgentTurnExecutor._followup_instruction),
+            }
+        )
+
+    def _record_prompt_run(
+        self,
+        *,
+        request: ChatRequest,
+        runtime: RuntimeConfig,
+        agent_id: str,
+        turn_beat: int,
+        speaker_position: int,
+        prompt_template_hash: str,
+        persona_revision_hash: str,
+        exposures: list[dict[str, Any]],
+    ) -> str | None:
+        recorder = getattr(self.storage, "record_agent_prompt_run", None)
+        if not request.turn_id or not callable(recorder):
+            return None
+        return recorder(
+            project_id=request.project_id,
+            turn_id=request.turn_id,
+            agent_id=agent_id,
+            turn_beat=turn_beat,
+            speaker_position=speaker_position,
+            provider=runtime.providers[agent_id],
+            model=runtime.models[agent_id],
+            prompt_template_hash=prompt_template_hash,
+            persona_revision_hash=persona_revision_hash,
+            context_selector_version=CONTEXT_SELECTOR_VERSION,
+            exposures=exposures,
+        )
+
+    def _finalize_prompt_run(
+        self,
+        prompt_run_id: str | None,
+        *,
+        status: str,
+        message_id: str | None = None,
+        provider_usage: dict[str, Any] | None = None,
+        output_chars: int | None = None,
+    ) -> None:
+        finalizer = getattr(self.storage, "complete_agent_prompt_run", None)
+        if prompt_run_id is None or not callable(finalizer):
+            return
+        finalizer(
+            prompt_run_id,
+            status=status,
+            message_id=message_id,
+            provider_usage=provider_usage,
+            output_chars=output_chars,
+        )
+
+    def _context_exposures(
+        self,
+        *,
+        project_id: str,
+        recent: list[dict],
+        same_turn: list[dict],
+        memory_history: list[dict],
+        global_memory_history: list[dict],
+        motif_context: list[dict],
+        room_motif_context: list[dict],
+        pattern_checkpoints: list[dict],
+        web_sources: list[dict],
+        role_signals: list[dict],
+    ) -> list[dict[str, Any]]:
+        exposures = [
+            *self._message_exposures(
+                recent,
+                context_kind="recent_message",
+                prompt_section="room_transcript",
+                selection_reason="recent_context_window",
+            ),
+            *self._message_exposures(
+                same_turn,
+                context_kind="same_turn_message",
+                prompt_section="room_transcript",
+                selection_reason="same_turn_sequence",
+            ),
+        ]
+        groups = (
+            (
+                memory_history,
+                "local_memory",
+                "recent_loop_returns",
+                "project_memory_selection",
+            ),
+            (
+                global_memory_history,
+                "global_memory",
+                "cross_project_returns",
+                "cross_project_memory_selection",
+            ),
+            (
+                motif_context,
+                "own_motif",
+                "own_motif_hypotheses",
+                "observer_motif_context",
+            ),
+            (
+                room_motif_context,
+                "other_observer_motif",
+                "room_motif_hypotheses",
+                "supported_room_motif_context",
+            ),
+            (
+                pattern_checkpoints,
+                "pattern_checkpoint",
+                "pattern_checkpoints",
+                "established_pattern_checkpoint",
+            ),
+            (
+                web_sources,
+                "web_source",
+                "web_sources",
+                "user_supplied_source",
+            ),
+            (
+                role_signals,
+                "role_signal",
+                "role_decorators",
+                "bounded_script_signal",
+            ),
+        )
+        for items, kind, section, reason in groups:
+            for rank, item in enumerate(items, start=1):
+                source_id = str(
+                    item.get("id")
+                    or item.get("pattern_key")
+                    or stable_fingerprint(item)[:32]
+                )
+                exposures.append(
+                    self._exposure(
+                        item,
+                        context_kind=kind,
+                        source_id=source_id,
+                        source_project_id=(
+                            item.get("project_id")
+                            or item.get("source_project_id")
+                            or project_id
+                        ),
+                        prompt_section=section,
+                        rank=rank,
+                        selection_reason=reason,
+                    )
+                )
+        return exposures
+
+    def _message_exposures(
+        self,
+        messages: list[dict],
+        *,
+        context_kind: str,
+        prompt_section: str,
+        selection_reason: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            self._exposure(
+                message,
+                context_kind=context_kind,
+                source_id=str(message.get("id") or stable_fingerprint(message)[:32]),
+                source_project_id=message.get("project_id"),
+                prompt_section=prompt_section,
+                rank=rank,
+                selection_reason=selection_reason,
+            )
+            for rank, message in enumerate(messages, start=1)
+        ]
+
+    @staticmethod
+    def _exposure(
+        item: dict,
+        *,
+        context_kind: str,
+        source_id: str,
+        source_project_id: str | None,
+        prompt_section: str,
+        rank: int,
+        selection_reason: str,
+    ) -> dict[str, Any]:
+        text_parts = [
+            item.get("content"),
+            item.get("return_text"),
+            item.get("return_summary"),
+            item.get("trigger_text"),
+            item.get("trigger_summary"),
+            item.get("description"),
+            item.get("title"),
+        ]
+        estimated_chars = sum(len(str(value)) for value in text_parts if value)
+        return {
+            "context_kind": context_kind,
+            "source_id": source_id,
+            "source_project_id": source_project_id,
+            "prompt_section": prompt_section,
+            "rank": rank,
+            "selection_reason": selection_reason,
+            "source_version_hash": stable_fingerprint(item),
+            "estimated_chars": estimated_chars,
+        }
 
     def _followup_instruction(self, beat_number: int) -> str:
         maximum = self.settings.max_agent_turn_beats

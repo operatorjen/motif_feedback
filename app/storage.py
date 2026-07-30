@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .storage_analytics import AnalyticsRepositoryMixin
 from .storage_core import (
     ChatTurnConflictError,
     StorageCore,
@@ -30,6 +31,7 @@ class Storage(
     StorageSchemaMixin,
     StorageMigrationMixin,
     TurnRepositoryMixin,
+    AnalyticsRepositoryMixin,
     FileOwnershipRepositoryMixin,
     MemoryRepositoryMixin,
     MotifRepositoryMixin,

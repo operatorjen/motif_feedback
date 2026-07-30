@@ -57,6 +57,15 @@ code { background: var(--paper-2); color: var(--ink); padding: .08rem .25rem; }
   background: var(--ink);
 }
 .masthead-actions { display: flex; align-items: center; gap: 8px; }
+.analytics-link {
+  border: 1px solid var(--line);
+  color: var(--paper);
+  padding: .38rem .55rem;
+  font-size: .68rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+.analytics-link:hover { background: var(--hot); color: var(--ink); border-color: var(--hot); }
 .layout-toggle { padding: .38rem .55rem; background: transparent; color: var(--paper); border-color: var(--line); font-size: .68rem; }
 .layout-toggle:hover { color: var(--ink); }
 .brand-block { display: flex; gap: 12px; align-items: center; }

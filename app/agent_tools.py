@@ -129,11 +129,12 @@ USER_TOOL_DEFINITIONS = [
                 "Privately record a sparse, observer-specific hypothesis about the conversational "
                 "motifs in this turn. Use at most once per response beat, only when a pattern is "
                 "meaningful, with exactly one primary motif and at most two secondary motifs. "
-                "Reuse a supplied motif_id for returns, even when using a new alias; do not turn "
-                "every noun or topic into a motif. A motif is a recurring organization that can "
-                "return or transform, not merely a subject. Connections to another observer's "
-                "motif are provisional relations, never automatic merges. These observations "
-                "remain inspectable and do not edit your persona memory."
+                "Reuse only one of your own supplied motif IDs for returns, even when using a "
+                "new alias; another observer's ID may appear only in connections[].motif_id. "
+                "Do not turn every noun or topic into a motif. A motif is a recurring "
+                "organization that can return or transform, not merely a subject. Connections "
+                "to another observer's motif are provisional relations, never automatic merges. "
+                "These observations remain inspectable and do not edit your persona memory."
             ),
             "parameters": {
                 "type": "object",
@@ -153,7 +154,14 @@ USER_TOOL_DEFINITIONS = [
                                 "primary",
                             ],
                             "properties": {
-                                "motif_id": {"type": "string"},
+                                "motif_id": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional ID of one of your own current conversational "
+                                        "motifs. Never use another observer's ID here; omit this "
+                                        "field to create a motif from your own lens."
+                                    ),
+                                },
                                 "label": {"type": "string", "maxLength": 96},
                                 "description": {"type": "string", "maxLength": 1200},
                                 "relation": {
@@ -185,7 +193,14 @@ USER_TOOL_DEFINITIONS = [
                                             "description",
                                         ],
                                         "properties": {
-                                            "motif_id": {"type": "string"},
+                                            "motif_id": {
+                                                "type": "string",
+                                                "description": (
+                                                    "Another observer's connection_target_id. "
+                                                    "This relates their motif to your observation "
+                                                    "without transferring ownership."
+                                                ),
+                                            },
                                             "relation": {
                                                 "type": "string",
                                                 "enum": [

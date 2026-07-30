@@ -480,7 +480,11 @@ class MotifRepositoryMixin:
                 (motif_id, project_id, observer_agent_id),
             ).fetchone()
             if existing is None:
-                raise StorageError("Referenced motif is not owned by this agent in this project.")
+                raise StorageError(
+                    "Referenced observations[].motif_id is not owned by this agent in this "
+                    "project. Use only an ID from this agent's motif context; put another "
+                    "observer's ID in connections[].motif_id."
+                )
         else:
             existing = connection.execute(
                 """

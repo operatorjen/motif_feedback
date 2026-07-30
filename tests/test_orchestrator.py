@@ -713,6 +713,22 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
         search_fallback_agent=None,
         role_signals=[],
         agent_id="agent_a",
+        motif_context=[
+            {
+                "id": "own-motif",
+                "label": "Embodied threshold",
+                "status": "supported",
+                "observer_agent_id": "agent_a",
+            }
+        ],
+        room_motif_context=[
+            {
+                "id": "other-motif",
+                "label": "Metastable transition",
+                "status": "supported",
+                "observer_agent_id": "agent_b",
+            }
+        ],
         pattern_checkpoints=[
             {
                 "id": "checkpoint",
@@ -731,6 +747,11 @@ def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior()
     assert "propose_persona_update" in prompt
     assert "Do not recap or restate prior replies" in prompt
     assert "YOUR RECURRING PATTERN CHECKPOINTS" in prompt
+    assert "Only IDs in this section may be used as an observation's `motif_id`" in prompt
+    assert "motif_id: own-motif" in prompt
+    assert "connection_target_id: other-motif" in prompt
+    assert "motif_id: other-motif" not in prompt
+    assert "may be used only as\n`connections[].motif_id`" in prompt
     assert "Threshold" in prompt
     assert "user_preference: test" in prompt
     assert "detected from explicit motif recurrence" in prompt

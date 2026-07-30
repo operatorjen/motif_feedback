@@ -694,9 +694,12 @@ def test_project_deletion_purges_files_conversations_sources_and_memory(tmp_path
         "memory_events": 1,
         "global_memory_events": 1,
         "web_sources": 1,
-        "chat_turns": 0,
-        "turn_operations": 0,
-    }
+            "chat_turns": 0,
+            "turn_operations": 0,
+            "agent_prompt_runs": 0,
+            "context_exposures": 0,
+            "feedback_events": 0,
+        }
     assert not (storage.projects_root / target["id"]).exists()
     assert target["id"] not in {project["id"] for project in storage.list_projects()}
     assert storage.list_messages(survivor["id"])[0]["content"] == "surviving conversation"

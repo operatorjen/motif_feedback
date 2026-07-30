@@ -122,6 +122,27 @@ class ProjectRepositoryMixin:
                             """,
                             (identifier,),
                         ).fetchone()["count"],
+                        "agent_prompt_runs": connection.execute(
+                            """
+                            SELECT COUNT(*) AS count FROM agent_prompt_runs
+                            WHERE project_id = ?
+                            """,
+                            (identifier,),
+                        ).fetchone()["count"],
+                        "context_exposures": connection.execute(
+                            """
+                            SELECT COUNT(*) AS count FROM context_exposures
+                            WHERE project_id = ?
+                            """,
+                            (identifier,),
+                        ).fetchone()["count"],
+                        "feedback_events": connection.execute(
+                            """
+                            SELECT COUNT(*) AS count FROM interaction_feedback_events
+                            WHERE project_id = ?
+                            """,
+                            (identifier,),
+                        ).fetchone()["count"],
                     }
                     connection.execute(
                         "DELETE FROM agent_global_memory_events WHERE source_project_id = ?",

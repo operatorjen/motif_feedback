@@ -2,21 +2,11 @@
 
 ![⟁](https://aesxarg.net/taste-as-system-sm.jpg)
 
-Motif Feedback is a multi-agent environment for long-term inquiry in which distinct interpretive
-lenses persist, adapt under user control, and remain separately attributable across
-conversations.
-
-It is a local-first, single-user application built around three persistent agent personas in one
-conversational room. It is designed for thematic work that benefits from distinct perspectives,
-continuity across returns, and revisiting ideas over time. Its project-scoped motif observatory
-keeps recurring conversational patterns inspectable without collapsing the agents' separate
-interpretations into one account.
-
-For example, if you repeatedly return to uncertainty as something to inhabit rather than solve,
-an agent may recognize that recurrence as a motif and preserve evidence of where it appeared.
-Once the pattern is established across distinct turns, the **MOTIFS** inspector lets you choose
-whether its observing agent should simply notice it, continue following it, test its limits, or
-pause it.
+Motif Feedback is a local-first, single-user application for user-guided conversations with
+three persistent agent personas in one conversational room. It is designed for long-running
+thematic work that benefits from distinct perspectives, continuity across returns, and
+revisiting ideas over time. Its project-scoped motif observatory keeps recurring conversational
+patterns inspectable without collapsing the agents' separate interpretations into one account.
 
 Each agent has an editable persona, a protected core motif, and separately configurable access
 to a hosted or local OpenAI-compatible model. Conversations, continuity records, sources, and
@@ -132,6 +122,15 @@ duplicating committed messages or changing sequential room causality.
 **DOWNLOAD LOG** exports every stored message in the current project as a chronological Markdown
 file. Each message is a numbered block with its speaker, timestamp, turn and response beat when
 available, sources, and retrieval notes.
+
+### Analytics and debugging
+
+**ANALYTICS / DEBUG** opens a project-filtered dashboard at `/analytics` for response activity,
+runtime and token use, prompt-context exposure, motif returns, and user feedback. Prompt
+instrumentation begins with new turns; historical gaps remain explicitly unknown. Context
+manifests do not copy prompt text, and feedback does not enter agent prompts.
+
+See [analytics.md](analytics.md) for metric definitions, limits, and a tuning workflow.
 
 ## Providers
 

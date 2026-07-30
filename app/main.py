@@ -37,6 +37,7 @@ from .models import (
     CodeRunInput,
     CodeRunRequest,
     FileSharingUpdate,
+    InteractionFeedbackUpdate,
     MotifPatternPreferenceUpdate,
     MotifStatusUpdate,
     PersonaEdit,
@@ -166,6 +167,11 @@ def index() -> FileResponse:
     return FileResponse(STATIC_ROOT / "index.html")
 
 
+@app.get("/analytics")
+def analytics_page() -> FileResponse:
+    return FileResponse(STATIC_ROOT / "analytics.html")
+
+
 def _runtime_state() -> dict:
     runtime = settings.load_runtime_config()
     setup_complete = runtime is not None
@@ -259,6 +265,27 @@ def update_provider_catalog(payload: ProviderCatalogEdit) -> dict:
 @app.get("/api/projects")
 def list_projects() -> list[dict]:
     return storage.list_projects()
+
+
+@app.get("/api/analytics")
+def analytics(project_id: str | None = Query(default=None, max_length=120)) -> dict:
+    try:
+        return storage.analytics_snapshot(project_id)
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/analytics/feedback")
+def update_interaction_feedback(payload: InteractionFeedbackUpdate) -> dict:
+    try:
+        return storage.record_interaction_feedback(
+            project_id=payload.project_id,
+            message_id=payload.message_id,
+            feedback_type=payload.feedback_type,
+            active=payload.active,
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/projects")

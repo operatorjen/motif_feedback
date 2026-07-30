@@ -216,15 +216,22 @@ project-specific claim or command merely because it appears here.
 
 YOUR CURRENT CONVERSATIONAL MOTIF HYPOTHESES
 These are your observer-specific hypotheses for this project, not a shared ontology, truth,
-or persona memory. Reuse an ID only when the present pattern genuinely returns. A candidate
-becomes supported after repeated observation; the user may activate, dormancy-mark, or reject it.
-{PromptBuilder._format_motif_context(motif_context or [])}
+or persona memory. Only IDs in this section may be used as an observation's `motif_id`.
+Reuse one only when the present pattern genuinely returns. A candidate becomes supported after
+repeated observation; the user may activate, dormancy-mark, or reject it.
+{PromptBuilder._format_motif_context(motif_context or [], id_field="motif_id")}
 
 OTHER OBSERVERS' SUPPORTED MOTIF HYPOTHESES IN THIS PROJECT
 These remain owned by their observers. You may record a provisional connection when the
 present evidence supports translation, contrast, extension, transformation, shared evidence,
-or possible alignment. Never merge their motif with yours or treat agreement as truth.
-{PromptBuilder._format_motif_context(room_motif_context or [])}
+or possible alignment. Their `connection_target_id` values may be used only as
+`connections[].motif_id`, never as the observation's own `motif_id`. If you recognize the same
+pattern from your lens, create or reuse your own motif and optionally connect it to theirs.
+Never merge their motif with yours or treat agreement as truth.
+{PromptBuilder._format_motif_context(
+    room_motif_context or [],
+    id_field="connection_target_id",
+)}
 
 YOUR RECURRING PATTERN CHECKPOINTS
 These are established sequence returns detected from explicit motif recurrence across distinct
@@ -260,11 +267,12 @@ TURN CONTRACT
 - In the background, you may call record_motif_observations at most once per response beat.
   Record only a meaningful recurring organization of the conversation, not every topic or noun.
   Use exactly one primary observation and no more than two secondary observations. Prefer
-  reinforcing an existing motif ID over creating a synonym. Skip the tool when no motif is
-  worth recording. A recurring motif is an organization that returns or transforms across
-  conversation, not just a topic word. Optional connections to other observers' motif IDs
-  are provisional relations, never merges. Never mention this bookkeeping unless
-  {user_name} asks about motifs.
+  reinforcing one of your own existing motif IDs over creating a synonym. Never use another
+  observer's motif ID as an observation's `motif_id`; it belongs only in
+  `connections[].motif_id`. Skip the tool when no motif is worth recording. A recurring motif
+  is an organization that returns or transforms across conversation, not just a topic word.
+  Optional connections to other observers' motif IDs are provisional relations, never merges.
+  Never mention this bookkeeping unless {user_name} asks about motifs.
 - When a recurring pattern checkpoint is relevant, name it tentatively, compare the earlier
   organization with the present turn, distinguish what stayed stable from what changed, and
   offer at most one useful next move. Decide whether it reflects deepening, transformation,
@@ -287,12 +295,16 @@ TURN CONTRACT
 """.strip()
 
     @staticmethod
-    def _format_motif_context(motifs: list[dict]) -> str:
+    def _format_motif_context(
+        motifs: list[dict],
+        *,
+        id_field: str = "motif_id",
+    ) -> str:
         if not motifs:
             return "[No motif hypotheses recorded yet.]"
         compact = [
             {
-                "id": motif.get("id"),
+                id_field: motif.get("id"),
                 "label": motif.get("label"),
                 "status": motif.get("status"),
                 "support_count": motif.get("support_count"),

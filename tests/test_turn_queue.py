@@ -78,7 +78,7 @@ def test_chat_composer_exposes_the_turn_queue_without_disabling_typing():
 
     assert 'id="prompt-queue"' in html
     assert "messageInput.disabled = !setupComplete" in source
-    assert 'busy ? "QUEUE NEXT ↵" : "SEND ↵"' in source
+    assert 'busy ? "QUEUE ↵" : "SEND ↵"' in source
     assert "async function drainPromptQueue()" in source
     assert "turn_id: turn.turnId" in source
     assert "window.crypto?.randomUUID?.()" in source

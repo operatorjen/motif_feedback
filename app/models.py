@@ -201,6 +201,18 @@ class MotifPatternPreferenceUpdate(BaseModel):
     preference: Literal["notice", "follow", "test", "paused"]
 
 
+class InteractionFeedbackUpdate(BaseModel):
+    project_id: str = Field(min_length=1, max_length=120)
+    message_id: str = Field(min_length=1, max_length=200)
+    feedback_type: Literal[
+        "useful_difference",
+        "repetitive",
+        "off_lens",
+        "unsupported",
+    ]
+    active: bool = True
+
+
 class ProviderCatalogEdit(BaseModel):
     yaml_text: str = Field(
         min_length=1,

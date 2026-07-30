@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Motif Feedback Analytics</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/analytics.css">
+</head>
+<body class="analytics-page">
+  <header class="analytics-masthead">
+    <div class="analytics-brand">
+      <a class="analytics-mark" href="/" aria-label="Return to the room">⟁</a>
+      <div>
+        <div class="section-label">OBSERVATORY</div>
+        <h1>ANALYTICS / DEBUGGING</h1>
+      </div>
+    </div>
+    <div class="analytics-actions">
+      <label>
+        PROJECT
+        <select id="analytics-project" aria-label="Analytics project">
+          <option value="">ALL PROJECTS</option>
+        </select>
+      </label>
+      <button id="analytics-refresh" type="button">REFRESH</button>
+      <a class="room-link" href="/">RETURN TO ROOM</a>
+    </div>
+  </header>
+
+  <main class="analytics-main">
+    <section class="analytics-intro">
+      <p>
+        Facts, context exposure, user review, and versioned runtime evidence remain separate.
+        Historical records predate some instrumentation; every graph reports its available coverage.
+      </p>
+      <div id="analytics-status" class="analytics-status" aria-live="polite">LOADING DATA</div>
+    </section>
+
+    <section aria-labelledby="coverage-title">
+      <div class="analytics-section-head">
+        <div>
+          <div class="section-label">CURRENT SCOPE</div>
+          <h2 id="coverage-title">MEASUREMENT COVERAGE</h2>
+        </div>
+        <p id="coverage-note">Loading stored records.</p>
+      </div>
+      <div id="coverage-grid" class="metric-grid"></div>
+    </section>
+
+    <section class="analytics-panel" aria-labelledby="activity-title">
+      <div class="analytics-section-head">
+        <div>
+          <div class="section-label">HISTORICAL ACTIVITY</div>
+          <h2 id="activity-title">AGENT RESPONSES OVER TIME</h2>
+        </div>
+        <p>Stored messages are available across the full database history.</p>
+      </div>
+      <div id="activity-chart" class="chart-shell"></div>
+    </section>
+
+    <div class="analytics-two-column">
+      <section class="analytics-panel" aria-labelledby="agents-title">
+        <div class="analytics-section-head">
+          <div>
+            <div class="section-label">ORDER + CONTRIBUTION</div>
+            <h2 id="agents-title">AGENT COMPARISON</h2>
+          </div>
+        </div>
+        <div id="agent-comparison" class="agent-comparison"></div>
+      </section>
+
+      <section class="analytics-panel" aria-labelledby="reliability-title">
+        <div class="analytics-section-head">
+          <div>
+            <div class="section-label">RUNTIME</div>
+            <h2 id="reliability-title">EFFICIENCY + RELIABILITY</h2>
+          </div>
+        </div>
+        <div id="reliability-grid" class="debug-list"></div>
+      </section>
+    </div>
+
+    <section class="analytics-panel" aria-labelledby="context-title">
+      <div class="analytics-section-head">
+        <div>
+          <div class="section-label">CAUSAL INPUT MANIFEST</div>
+          <h2 id="context-title">PROMPT CONTEXT EXPOSURE</h2>
+        </div>
+        <p>Records what entered each agent prompt without copying source text.</p>
+      </div>
+      <div id="context-chart" class="context-chart"></div>
+    </section>
+
+    <div class="analytics-two-column">
+      <section class="analytics-panel" aria-labelledby="motif-exposure-title">
+        <div class="analytics-section-head">
+          <div>
+            <div class="section-label">RECOGNITION VS PRIMING</div>
+            <h2 id="motif-exposure-title">MOTIF RETURN EXPOSURE</h2>
+          </div>
+        </div>
+        <div id="motif-exposure" class="motif-exposure"></div>
+      </section>
+
+      <section class="analytics-panel" aria-labelledby="motif-lifecycle-title">
+        <div class="analytics-section-head">
+          <div>
+            <div class="section-label">OBSERVER-OWNED STATE</div>
+            <h2 id="motif-lifecycle-title">MOTIF LIFECYCLE</h2>
+          </div>
+        </div>
+        <div id="motif-lifecycle" class="motif-lifecycle"></div>
+      </section>
+    </div>
+
+    <section class="analytics-panel" aria-labelledby="projects-title">
+      <div class="analytics-section-head">
+        <div>
+          <div class="section-label">DISTRIBUTION</div>
+          <h2 id="projects-title">PROJECT ACTIVITY</h2>
+        </div>
+      </div>
+      <div id="project-activity" class="project-activity"></div>
+    </section>
+
+    <section class="analytics-panel" aria-labelledby="review-title">
+      <div class="analytics-section-head">
+        <div>
+          <div class="section-label">HUMAN REVIEW</div>
+          <h2 id="review-title">RECENT RESPONSE FEEDBACK</h2>
+        </div>
+        <p>Optional judgments remain user-owned and do not enter agent prompts.</p>
+      </div>
+      <div id="response-review" class="response-review"></div>
+    </section>
+  </main>
+
+  <div id="analytics-toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/js/analytics.js"></script>
+</body>
+</html>
