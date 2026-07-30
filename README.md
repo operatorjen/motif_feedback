@@ -2,11 +2,21 @@
 
 ![⟁](https://aesxarg.net/taste-as-system-sm.jpg)
 
-Motif Feedback is a local-first, single-user application for user-guided conversations with
-three persistent agent personas in one conversational room. It is designed for long-running
-thematic work that benefits from distinct perspectives, continuity across returns, and
-revisiting ideas over time. Its project-scoped motif observatory keeps recurring conversational
-patterns inspectable without collapsing the agents' separate interpretations into one account.
+Motif Feedback is a multi-agent environment for long-term inquiry in which distinct interpretive
+lenses persist, adapt under user control, and remain separately attributable across
+conversations.
+
+It is a local-first, single-user application built around three persistent agent personas in one
+conversational room. It is designed for thematic work that benefits from distinct perspectives,
+continuity across returns, and revisiting ideas over time. Its project-scoped motif observatory
+keeps recurring conversational patterns inspectable without collapsing the agents' separate
+interpretations into one account.
+
+For example, if you repeatedly return to uncertainty as something to inhabit rather than solve,
+an agent may recognize that recurrence as a motif and preserve evidence of where it appeared.
+Once the pattern is established across distinct turns, the **MOTIFS** inspector lets you choose
+whether its observing agent should simply notice it, continue following it, test its limits, or
+pause it.
 
 Each agent has an editable persona, a protected core motif, and separately configurable access
 to a hosted or local OpenAI-compatible model. Conversations, continuity records, sources, and
@@ -94,13 +104,13 @@ transformation, or shared evidence between motifs, but those relations never mer
 turn agreement into truth.
 
 The **MOTIFS** inspector shows motif tags, evidence, relations, and lifecycle history. It also
-reports recurring two- and three-motif sequences, return paths, recurrence, transition diversity,
-and return paths. When an established sequence recurs across at least three distinct turns, it
-becomes a pattern checkpoint. The user can let its observing agent simply notice it, keep
-following it, test its limits, or pause it. A relevant agent may then tentatively compare what
-stayed stable with what changed and offer one useful next move. Checkpoints never alter memory,
-persona, motif status, or speaking order. Recurrence and transition diversity remain descriptive
-measurements; they do not decide how an agent responds.
+reports recurring two- and three-motif sequences, recurrence, transition diversity, and return
+paths. When an established sequence recurs across at least three distinct turns, it becomes a
+pattern checkpoint. The user can let its observing agent simply notice it, keep following it,
+test its limits, or pause it. A relevant agent may then tentatively compare what stayed stable
+with what changed and offer one useful next move. Checkpoints never alter memory, persona, motif
+status, or speaking order. Recurrence and transition diversity remain descriptive measurements;
+they do not decide how an agent responds.
 
 ### Turn order, queueing, and recovery
 
