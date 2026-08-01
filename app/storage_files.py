@@ -8,8 +8,8 @@ from .storage_core import (
 
 class FileOwnershipRepositoryMixin:
     def get_file_owner(self, project_id: str, path: str) -> dict | None:
-        self.get_project(project_id)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             row = connection.execute(
                 """
                 SELECT owner_type, owner_id, shared_agent_edit, created_at, updated_at
@@ -20,8 +20,8 @@ class FileOwnershipRepositoryMixin:
         return dict(row) if row is not None else None
 
     def file_owners(self, project_id: str) -> dict[str, dict]:
-        self.get_project(project_id)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT project_id, path, owner_type, owner_id, shared_agent_edit,
@@ -90,4 +90,3 @@ class FileOwnershipRepositoryMixin:
                 "DELETE FROM file_ownership WHERE project_id = ? AND path = ?",
                 (project_id, path),
             )
-

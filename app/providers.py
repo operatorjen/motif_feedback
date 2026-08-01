@@ -38,6 +38,7 @@ class AgentCompletion:
     locally_generated: bool = False
     continue_turn: bool = False
     usage: dict[str, int] = field(default_factory=dict)
+    request_usage: list[dict[str, int]] = field(default_factory=list)
 
 
 class DirectProviderClient:
@@ -114,6 +115,7 @@ class DirectProviderClient:
         participation_retries = 0
         total_tool_calls = 0
         usage_totals: dict[str, int] = {}
+        request_usage: list[dict[str, int]] = []
         participation_retry_limit = self.settings.provider_participation_retries
         for round_index in range(self.settings.max_tool_rounds + 1):
             if progress_callback is not None:
@@ -127,7 +129,9 @@ class DirectProviderClient:
                 max_tokens=max_tokens,
             )
             response_data = await self._post_chat(provider, payload, key)
-            self._accumulate_usage(usage_totals, response_data.get("usage"))
+            normalized_usage = self._normalize_usage(response_data.get("usage"))
+            self._accumulate_usage(usage_totals, normalized_usage)
+            request_usage.append({"request": round_index + 1, **normalized_usage})
             message, tool_calls = self._response_message(response_data, label)
             response_tool_limit = self.settings.provider_tool_calls_per_response
             turn_tool_limit = self.settings.provider_tool_calls_per_turn
@@ -155,6 +159,7 @@ class DirectProviderClient:
                 )
                 if completion is not None:
                     completion.usage = usage_totals
+                    completion.request_usage = request_usage
                     return completion
                 continue
 
@@ -256,12 +261,14 @@ class DirectProviderClient:
             raise ProviderNoResponse(
                 f"{options['label']} native search returned no written response."
             )
+        usage = self._normalize_usage(response_data.get("usage"))
         return AgentCompletion(
             content=content,
             annotations=annotations,
             raw_message=response_data,
             tool_events=[],
-            usage=self._normalize_usage(response_data.get("usage")),
+            usage=usage,
+            request_usage=[{"request": 1, **usage}],
         )
 
     @staticmethod
@@ -275,10 +282,31 @@ class DirectProviderClient:
             "prompt_tokens",
             "completion_tokens",
             "total_tokens",
+            "cached_prompt_tokens",
+            "reasoning_tokens",
         ):
             value = raw_usage.get(key)
             if isinstance(value, int) and value >= 0:
                 usage[key] = value
+        nested_keys = {
+            "cached_prompt_tokens": (
+                ("prompt_tokens_details", "cached_tokens"),
+                ("input_tokens_details", "cached_tokens"),
+            ),
+            "reasoning_tokens": (
+                ("completion_tokens_details", "reasoning_tokens"),
+                ("output_tokens_details", "reasoning_tokens"),
+            ),
+        }
+        for canonical_key, paths in nested_keys.items():
+            values = []
+            for container_key, value_key in paths:
+                container = raw_usage.get(container_key)
+                value = container.get(value_key) if isinstance(container, dict) else None
+                if isinstance(value, int) and value >= 0:
+                    values.append(value)
+            if values:
+                usage[canonical_key] = max(values)
         return usage
 
     @classmethod

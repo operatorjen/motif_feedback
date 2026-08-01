@@ -29,8 +29,6 @@ class MessageRepositoryMixin:
         metadata: dict | None = None,
         operation_id: str | None = None,
     ) -> dict:
-        project = self.get_project(project_id)
-        del project
         timestamp = utc_now()
         message = {
             "id": uuid.uuid4().hex,
@@ -45,6 +43,7 @@ class MessageRepositoryMixin:
             "created_at": timestamp,
         }
         with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             if operation_id is not None:
                 existing = connection.execute(
                     """

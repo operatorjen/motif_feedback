@@ -226,6 +226,7 @@ class AgentTurnExecutor:
                 prompt_run_id,
                 status="discarded",
                 provider_usage=completion.usage,
+                provider_request_usage=completion.request_usage,
                 output_chars=len(completion.content),
             )
             await record_search_evidence_failure(
@@ -530,6 +531,7 @@ class AgentTurnExecutor:
             status="completed",
             message_id=stored["id"],
             provider_usage=completion.usage,
+            provider_request_usage=completion.request_usage,
             output_chars=len(content),
         )
         return stored
@@ -706,6 +708,7 @@ class AgentTurnExecutor:
         status: str,
         message_id: str | None = None,
         provider_usage: dict[str, Any] | None = None,
+        provider_request_usage: list[dict[str, Any]] | None = None,
         output_chars: int | None = None,
     ) -> None:
         finalizer = getattr(self.storage, "complete_agent_prompt_run", None)
@@ -716,6 +719,7 @@ class AgentTurnExecutor:
             status=status,
             message_id=message_id,
             provider_usage=provider_usage,
+            provider_request_usage=provider_request_usage,
             output_chars=output_chars,
         )
 
@@ -979,11 +983,9 @@ class AgentTurnExecutor:
             operation_id=operation_id,
         )
         if outcome in {"response", "action_response"}:
-            project = self.storage.get_project(request.project_id)
             self.storage.add_global_memory_event(
                 agent_id=agent_id,
                 source_project_id=request.project_id,
-                source_project_name=project["name"],
                 source_memory_event_id=local_event["id"],
                 trigger_text=local_event["trigger_text"],
                 return_text=local_event["return_text"],

@@ -371,7 +371,13 @@ class TurnRepositoryMixin:
         encoded = json.dumps(result, ensure_ascii=False)
         with self._write_lock, self.connection() as connection:
             row = connection.execute(
-                "SELECT status, result_json FROM turn_operations WHERE id = ?",
+                """
+                SELECT id, turn_id, project_id, agent_id, turn_beat,
+                       operation_type, request_fingerprint, status,
+                       payload_json, result_json, started_at, updated_at,
+                       completed_at
+                FROM turn_operations WHERE id = ?
+                """,
                 (operation_id,),
             ).fetchone()
             if row is None:
@@ -392,7 +398,17 @@ class TurnRepositoryMixin:
                     """,
                     (encoded, timestamp, timestamp, operation_id),
                 )
-        return self.get_turn_operation(operation_id)
+                operation = self._row_to_turn_operation(row)
+                operation.update(
+                    {
+                        "status": "completed",
+                        "result": result,
+                        "updated_at": timestamp,
+                        "completed_at": timestamp,
+                    }
+                )
+                return operation
+        return self._row_to_turn_operation(row)
 
     def get_turn_operation(self, operation_id: str) -> dict:
         with self.connection() as connection:

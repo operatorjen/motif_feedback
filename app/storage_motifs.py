@@ -45,8 +45,8 @@ def normalize_motif_label(label: str) -> str:
 
 class MotifRepositoryMixin:
     def list_motif_pattern_preferences(self, project_id: str) -> list[dict]:
-        self.get_project(project_id)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 """
                 SELECT pattern_key, observer_agent_id, preference, updated_at
@@ -113,12 +113,12 @@ class MotifRepositoryMixin:
         user_message_id: str | None,
         observations: list[dict[str, Any]],
     ) -> dict:
-        self.get_project(project_id)
         prepared = self._validate_motif_observations(observations)
         if not turn_id or not operation_id:
             raise StorageError("Motif observations require a durable turn operation.")
 
         with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             prior = connection.execute(
                 """
                 SELECT result_json FROM motif_observation_batches
@@ -214,7 +214,6 @@ class MotifRepositoryMixin:
         statuses: set[str] | None = None,
         limit: int = DEFAULT_MOTIF_LIMIT,
     ) -> list[dict]:
-        self.get_project(project_id)
         safe_limit = min(max(int(limit), 1), MAX_MOTIF_LIMIT)
         clauses = ["project_id = ?"]
         parameters: list[Any] = [project_id]
@@ -230,6 +229,7 @@ class MotifRepositoryMixin:
             parameters.extend(sorted(statuses))
         parameters.append(safe_limit)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 f"""
                 SELECT * FROM motifs
@@ -244,16 +244,15 @@ class MotifRepositoryMixin:
         return motifs
 
     def get_motif(self, project_id: str, motif_id: str) -> dict:
-        self.get_project(project_id)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             row = connection.execute(
                 "SELECT * FROM motifs WHERE project_id = ? AND id = ?",
                 (project_id, motif_id),
             ).fetchone()
-        if row is None:
-            raise StorageError("Motif not found.")
-        motif = self._row_to_motif(row)
-        with self.connection() as connection:
+            if row is None:
+                raise StorageError("Motif not found.")
+            motif = self._row_to_motif(row)
             self._attach_aliases(connection, [motif])
         return motif
 
@@ -424,7 +423,6 @@ class MotifRepositoryMixin:
         limit: int,
         statuses: set[str] | None = None,
     ) -> list[dict]:
-        self.get_project(project_id)
         safe_limit = min(max(int(limit), 1), MAX_MOTIF_LIMIT)
         if statuses and (set(statuses) - MOTIF_STATUSES):
             raise StorageError("Unknown motif status.")
@@ -436,6 +434,7 @@ class MotifRepositoryMixin:
             parameters.extend(sorted(statuses))
         parameters.append(safe_limit)
         with self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             rows = connection.execute(
                 f"""
                 SELECT motif_id, label, status, turn_id, turn_beat, created_at FROM (

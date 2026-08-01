@@ -1,6 +1,43 @@
+import sqlite3
 from pathlib import Path
 
 from app.storage import Storage
+
+
+def test_prompt_usage_columns_are_added_to_existing_databases(tmp_path: Path):
+    database = tmp_path / "state" / "motif.db"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE agent_prompt_runs (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL, turn_beat INTEGER NOT NULL,
+                speaker_position INTEGER NOT NULL, provider TEXT NOT NULL,
+                model TEXT NOT NULL, prompt_template_hash TEXT NOT NULL,
+                persona_revision_hash TEXT NOT NULL, context_selector_version TEXT NOT NULL,
+                status TEXT NOT NULL, message_id TEXT, prompt_tokens INTEGER,
+                completion_tokens INTEGER, total_tokens INTEGER, output_chars INTEGER,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE(turn_id, agent_id, turn_beat)
+            )
+            """
+        )
+
+    storage = Storage(database, tmp_path / "projects")
+    storage.initialize()
+    with storage.connection() as connection:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(agent_prompt_runs)").fetchall()
+        }
+
+    assert {
+        "cached_prompt_tokens",
+        "reasoning_tokens",
+        "provider_requests",
+        "request_usage_json",
+    } <= columns
 
 
 def motif_observation(label: str, motif_id: str | None = None) -> dict:
@@ -117,7 +154,13 @@ def test_analytics_records_context_feedback_and_prompted_motif_returns(tmp_path:
             "prompt_tokens": 100,
             "completion_tokens": 20,
             "total_tokens": 120,
+            "cached_prompt_tokens": 40,
+            "reasoning_tokens": 5,
         },
+        provider_request_usage=[
+            {"request": 1, "prompt_tokens": 60, "cached_prompt_tokens": 10},
+            {"request": 2, "prompt_tokens": 40, "cached_prompt_tokens": 30},
+        ],
         output_chars=len(first_response["content"]),
     )
 
@@ -181,6 +224,9 @@ def test_analytics_records_context_feedback_and_prompted_motif_returns(tmp_path:
     assert snapshot["coverage"]["context_exposures"] == 2
     assert snapshot["agents"][0]["speaker_positions"] == {"1": 2}
     assert snapshot["agents"][0]["feedback"]["useful_difference"] == 1
+    assert snapshot["agents"][0]["cached_prompt_tokens"] == 40
+    assert snapshot["agents"][0]["reasoning_tokens"] == 5
+    assert snapshot["agents"][0]["provider_requests"] == 2
     assert snapshot["motifs"]["return_exposure"] == {
         "prompted": 1,
         "unprompted": 1,

@@ -95,6 +95,9 @@ class ProjectFileTools:
         return root
 
     def confined_path(self, project_id: str, relative_path: str) -> Path:
+        return self._confined_path_from_root(self.project_root(project_id), relative_path)
+
+    def _confined_path_from_root(self, root: Path, relative_path: str) -> Path:
         if not relative_path or "\x00" in relative_path:
             raise FileToolError("A valid relative path is required.")
         supplied = Path(relative_path)
@@ -103,7 +106,6 @@ class ProjectFileTools:
         if any(part in {"", ".", ".."} for part in supplied.parts):
             raise FileToolError("Path traversal and empty path components are not allowed.")
 
-        root = self.project_root(project_id)
         current = root
         for part in supplied.parts:
             current = current / part
@@ -144,6 +146,9 @@ class ProjectFileTools:
 
     def list_files(self, project_id: str) -> list[dict]:
         root = self.project_root(project_id)
+        return self._list_files_from_root(project_id, root)
+
+    def _list_files_from_root(self, project_id: str, root: Path) -> list[dict]:
         owners = self.storage.file_owners(project_id)
         output: list[dict] = []
         for path in sorted(root.rglob("*")):
@@ -177,6 +182,14 @@ class ProjectFileTools:
         max_chars: int = PROJECT_FILE_READ_MAX_CHARS,
     ) -> dict:
         path = self.confined_path(project_id, relative_path)
+        return self._read_file_from_path(path, relative_path, max_chars)
+
+    def _read_file_from_path(
+        self,
+        path: Path,
+        relative_path: str,
+        max_chars: int,
+    ) -> dict:
         self._validate_suffix(path)
         if not path.exists() or not path.is_file():
             raise FileToolError("File not found.")
@@ -434,13 +447,15 @@ class ProjectFileTools:
             PROJECT_FILE_SEARCH_MAX_RESULTS,
         )
         results: list[dict] = []
-        for file_info in self.list_files(project_id):
+        root = self.project_root(project_id)
+        for file_info in self._list_files_from_root(project_id, root):
             path = file_info["path"]
             try:
-                data = self.read_file(
-                    project_id,
+                confined = self._confined_path_from_root(root, path)
+                data = self._read_file_from_path(
+                    confined,
                     path,
-                    max_chars=PROJECT_FILE_SEARCH_SCAN_MAX_CHARS,
+                    PROJECT_FILE_SEARCH_SCAN_MAX_CHARS,
                 )
             except FileToolError:
                 continue

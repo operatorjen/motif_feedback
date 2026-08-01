@@ -2,6 +2,8 @@
 
 ![⟁](https://aesxarg.net/taste-as-system-sm.jpg)
 
+[![CI](https://github.com/operatorjen/motif_feedback/actions/workflows/ci.yml/badge.svg)](https://github.com/operatorjen/motif_feedback/actions/workflows/ci.yml)
+
 Motif Feedback is a local-first, single-user application for user-guided conversations with
 three persistent agent personas in one conversational room. It is designed for long-running
 thematic work that benefits from distinct perspectives, continuity across returns, and

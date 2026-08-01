@@ -48,9 +48,9 @@ class MemoryRepositoryMixin:
         model: str,
         operation_id: str | None = None,
     ) -> dict:
-        self.get_project(project_id)
         timestamp = utc_now()
         with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             if operation_id is not None:
                 existing = connection.execute(
                     """
@@ -195,9 +195,18 @@ class MemoryRepositoryMixin:
                     """,
                     (expression, project_id, agent_id, safe_limit),
                 ).fetchall()
+                if not rows:
+                    rows = connection.execute(
+                        """
+                        SELECT id, project_id, agent_id, user_message_id, sequence, outcome,
+                               trigger_text, return_text, actions_json, provider, model, created_at
+                        FROM agent_memory_events
+                        WHERE project_id = ? AND agent_id = ?
+                        ORDER BY sequence DESC LIMIT ?
+                        """,
+                        (project_id, agent_id, safe_limit),
+                    ).fetchall()
         except sqlite3.OperationalError:
-            return self.list_memory_events(project_id, agent_id, limit=limit)
-        if not rows:
             return self.list_memory_events(project_id, agent_id, limit=limit)
         return [self._row_with_actions(row) for row in rows]
 
@@ -253,7 +262,7 @@ class MemoryRepositoryMixin:
         *,
         agent_id: str,
         source_project_id: str,
-        source_project_name: str,
+        source_project_name: str | None = None,
         source_memory_event_id: str,
         trigger_text: str,
         return_text: str,
@@ -473,13 +482,32 @@ class MemoryRepositoryMixin:
                     """,
                     values,
                 ).fetchall()
+                if not rows:
+                    fallback_where = "global_memory.agent_id = ?"
+                    fallback_values: list[object] = [agent_id]
+                    if exclude_project_id is not None:
+                        fallback_where += " AND global_memory.source_project_id != ?"
+                        fallback_values.append(exclude_project_id)
+                    fallback_values.append(safe_limit)
+                    rows = connection.execute(
+                        f"""
+                        SELECT global_memory.id, global_memory.agent_id,
+                               global_memory.source_project_id,
+                               global_memory.source_project_name,
+                               global_memory.source_memory_event_id,
+                               global_memory.sequence, global_memory.trigger_summary,
+                               global_memory.return_summary,
+                               global_memory.actions_json, global_memory.created_at,
+                               source.user_message_id
+                        FROM agent_global_memory_events AS global_memory
+                        JOIN agent_memory_events AS source
+                          ON source.id = global_memory.source_memory_event_id
+                        WHERE {fallback_where}
+                        ORDER BY global_memory.sequence DESC LIMIT ?
+                        """,
+                        fallback_values,
+                    ).fetchall()
         except sqlite3.OperationalError:
-            return self.list_global_memory_context_events(
-                agent_id,
-                exclude_project_id=exclude_project_id,
-                limit=limit,
-            )
-        if not rows:
             return self.list_global_memory_context_events(
                 agent_id,
                 exclude_project_id=exclude_project_id,

@@ -310,6 +310,10 @@ class StorageSchemaMixin:
                     prompt_tokens INTEGER,
                     completion_tokens INTEGER,
                     total_tokens INTEGER,
+                    cached_prompt_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    provider_requests INTEGER,
+                    request_usage_json TEXT NOT NULL DEFAULT '[]',
                     output_chars INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -451,6 +455,20 @@ class StorageSchemaMixin:
                 connection.execute(
                     "ALTER TABLE file_ownership ADD COLUMN shared_agent_edit INTEGER NOT NULL DEFAULT 0"
                 )
+            prompt_run_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(agent_prompt_runs)").fetchall()
+            }
+            for name, declaration in (
+                ("cached_prompt_tokens", "INTEGER"),
+                ("reasoning_tokens", "INTEGER"),
+                ("provider_requests", "INTEGER"),
+                ("request_usage_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if name not in prompt_run_columns:
+                    connection.execute(
+                        f"ALTER TABLE agent_prompt_runs ADD COLUMN {name} {declaration}"
+                    )
             web_source_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(web_sources)").fetchall()

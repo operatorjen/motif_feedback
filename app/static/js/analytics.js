@@ -268,7 +268,9 @@ function renderReliability() {
     debugRow("AVERAGE TURN DURATION", formatDuration(reliability.average_duration_ms)),
     debugRow("PROVIDER REQUESTS", number(reliability.provider_requests)),
     debugRow("PROMPT TOKENS", number(usage.prompt_tokens)),
+    debugRow("CACHED PROMPT TOKENS", number(usage.cached_prompt_tokens)),
     debugRow("COMPLETION TOKENS", number(usage.completion_tokens)),
+    debugRow("REASONING TOKENS", number(usage.reasoning_tokens)),
     debugRow("TOTAL TOKENS", number(usage.total_tokens)),
   );
 }

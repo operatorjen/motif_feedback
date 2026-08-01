@@ -386,6 +386,24 @@ def test_project_file_search_returns_the_best_matches_not_the_first_matches(tmp_
     assert [(result["path"], result["score"]) for result in results] == [("z-high.md", 4)]
 
 
+def test_project_file_search_reuses_project_validation_across_files(tmp_path: Path):
+    _, storage, _, tools = make_services(tmp_path)
+    project = storage.create_project("Bounded search connections")
+    for index in range(8):
+        tools.write_file(
+            project["id"],
+            f"note-{index}.md",
+            f"motif observation {index}",
+            actor_type="user",
+        )
+
+    with patch.object(storage, "connection", wraps=storage.connection) as connection:
+        results = tools.search_files(project["id"], "motif")
+
+    assert len(results) == 8
+    assert connection.call_count == 2
+
+
 def test_project_files_cannot_escape_workspace(tmp_path: Path):
     _, storage, _, tools = make_services(tmp_path)
     project = storage.create_project("Safety")

@@ -127,7 +127,13 @@ def test_provider_usage_is_accumulated_across_tool_rounds():
     responses = iter(
         [
             {
-                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                    "completion_tokens_details": {"reasoning_tokens": 1},
+                },
                 "choices": [
                     {
                         "message": {
@@ -146,7 +152,13 @@ def test_provider_usage_is_accumulated_across_tool_rounds():
                 ],
             },
             {
-                "usage": {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24},
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 4,
+                    "total_tokens": 24,
+                    "prompt_tokens_details": {"cached_tokens": 8},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                },
                 "choices": [
                     {
                         "message": {
@@ -179,7 +191,27 @@ def test_provider_usage_is_accumulated_across_tool_rounds():
         "prompt_tokens": 30,
         "completion_tokens": 6,
         "total_tokens": 36,
+        "cached_prompt_tokens": 12,
+        "reasoning_tokens": 3,
     }
+    assert completion.request_usage == [
+        {
+            "request": 1,
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "cached_prompt_tokens": 4,
+            "reasoning_tokens": 1,
+        },
+        {
+            "request": 2,
+            "prompt_tokens": 20,
+            "completion_tokens": 4,
+            "total_tokens": 24,
+            "cached_prompt_tokens": 8,
+            "reasoning_tokens": 2,
+        },
+    ]
 
 
 def test_openai_search_fallback_uses_responses_web_search():

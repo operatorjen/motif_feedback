@@ -2,7 +2,14 @@ import { api, setSessionToken, streamApi } from "./api.js";
 import { renderCodeViewer } from "./code_viewer.js";
 import { appendRoleSignal, createDemoController } from "./demo_controller.js";
 import { renderMarkdown } from "./markdown.js";
+import { decorateMessageNode, reconcileMessageNodes } from "./message_reconciler.js";
 import { TurnQueue } from "./turn_queue.js";
+import {
+  createTurnRefreshState,
+  observeTurnRefreshEvent,
+  observeTurnRefreshResult,
+  turnRefreshTargets,
+} from "./turn_refresh.js";
 
 const UI_DEFAULTS = Object.freeze({
   toastDurationMs: 4_200,
@@ -203,7 +210,7 @@ function setBusy(busy) {
   elements.turnRecovery.querySelectorAll("button").forEach((button) => {
     button.disabled = busy;
   });
-  elements.sendButton.textContent = busy ? "QUEUE NEXT ↵" : "SEND ↵";
+  elements.sendButton.textContent = busy ? "QUEUE ↵" : "SEND ↵";
 }
 
 function currentParticipants() {
@@ -883,7 +890,7 @@ function renderMessage(message) {
     article.append(provenanceBox);
   }
 
-  return article;
+  return decorateMessageNode(article, message);
 }
 
 function beginTurnProgress() {
@@ -1070,9 +1077,9 @@ function renderMessages(messages) {
     elements.newReturns.classList.add("hidden");
     return;
   }
-  const fragment = document.createDocumentFragment();
-  for (const message of messages) fragment.append(renderMessage(message));
-  elements.messages.replaceChildren(fragment);
+  reconcileMessageNodes(elements.messages, messages, renderMessage, {
+    reuseExisting: !projectChanged,
+  });
   state.renderedProject = state.currentProject;
   restoreMessagesViewport(viewport, !projectChanged);
 }
@@ -1278,6 +1285,19 @@ async function loadSources() {
   elements.sourceList.replaceChildren(fragment);
 }
 
+async function refreshChangedTurnPanels(refreshState) {
+  const loaders = {
+    messages: loadMessages,
+    memory: loadMemoryLoop,
+    recovery: loadTurnRecovery,
+    motifs: loadMotifs,
+    files: loadFiles,
+    sources: loadSources,
+    proposals: loadProposals,
+  };
+  await Promise.all(turnRefreshTargets(refreshState).map((target) => loaders[target]()));
+}
+
 function formatTurnUsage(turn) {
   const usage = turn.provider_usage || {};
   const tokenCount = usage.total_tokens;
@@ -1295,23 +1315,20 @@ async function resumeTurn(turn) {
   }
   setBusy(true);
   beginTurnProgress();
+  const refreshState = createTurnRefreshState();
   try {
     const result = await streamApi(
       `/api/chat-turns/${encodeURIComponent(state.currentProject)}/${encodeURIComponent(turn.id)}/resume/stream`,
       { method: "POST" },
-      updateTurnProgress,
+      (event) => {
+        observeTurnRefreshEvent(refreshState, event);
+        updateTurnProgress(event);
+      },
     );
     if (!result) throw new Error("The server closed before returning a resumed result.");
+    observeTurnRefreshResult(refreshState, result);
     updateResearchIndicator(result);
-    await Promise.all([
-      loadMessages(),
-      loadMemoryLoop(),
-      loadMotifs(),
-      loadFiles(),
-      loadSources(),
-      loadProposals(),
-      loadTurnRecovery(),
-    ]);
+    await refreshChangedTurnPanels(refreshState);
     renderAgentFailures(result.agent_failures || []);
     showToast("Turn resumed from its stored progress.");
   } catch (error) {
@@ -1865,6 +1882,7 @@ function updateResearchIndicator(result) {
 
 async function executeQueuedPrompt(turn) {
   appendOptimisticPrompt(turn);
+  const refreshState = createTurnRefreshState();
   try {
     if (state.currentProject === turn.projectId) beginTurnProgress();
     const result = await streamApi("/api/chat/stream", {
@@ -1877,20 +1895,14 @@ async function executeQueuedPrompt(turn) {
         research_mode: turn.researchMode,
       }),
     }, (event) => {
+      observeTurnRefreshEvent(refreshState, event);
       if (state.currentProject === turn.projectId) updateTurnProgress(event);
     });
     if (!result) throw new Error("The server closed the response before returning a result.");
     if (state.currentProject === turn.projectId) {
+      observeTurnRefreshResult(refreshState, result);
       updateResearchIndicator(result);
-      await Promise.all([
-        loadMessages(),
-        loadMemoryLoop(),
-        loadMotifs(),
-        loadFiles(),
-        loadSources(),
-        loadProposals(),
-        loadTurnRecovery(),
-      ]);
+      await refreshChangedTurnPanels(refreshState);
       renderAgentFailures(result.agent_failures || []);
     } else {
       showToast(`Queued turn completed in ${turn.projectName}.`);

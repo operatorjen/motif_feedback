@@ -129,6 +129,15 @@ class ExecutionLedger:
                 for key, value in (result.get("usage") or {}).items()
                 if isinstance(value, int)
             },
+            request_usage=[
+                {
+                    str(key): int(value)
+                    for key, value in item.items()
+                    if isinstance(value, int)
+                }
+                for item in (result.get("request_usage") or [])
+                if isinstance(item, dict)
+            ],
         )
 
     def checkpoint_completion(

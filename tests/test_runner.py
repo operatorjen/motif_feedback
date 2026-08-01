@@ -222,6 +222,9 @@ def test_runner_cancels_the_process_group_over_its_existing_connection(monkeypat
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper cleanup is runner-specific.")
 def test_runner_kills_descendants_that_detach_into_a_new_session(monkeypatch, tmp_path):
     monkeypatch.setattr(runner_service, "PYTHON_EXECUTABLE", sys.executable)
+    # Hosted CI users may already own more processes than the production runner's
+    # RLIMIT_NPROC cap. This test exercises detached-process cleanup, not that cap.
+    monkeypatch.setattr(runner_service, "CHILD_PROCESS_LIMIT", 4_096)
     marker = tmp_path / "detached-child-survived"
     result = runner_service.run_python(
         "detach.py",
@@ -241,7 +244,7 @@ def test_runner_kills_descendants_that_detach_into_a_new_session(monkeypatch, tm
     )
     time.sleep(0.4)
 
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["stdout"] == "parent complete\n"
     assert not marker.exists()
 

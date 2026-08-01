@@ -63,7 +63,6 @@ class AnalyticsRepositoryMixin:
         context_selector_version: str,
         exposures: list[dict[str, Any]],
     ) -> str:
-        self.get_project(project_id)
         if not turn_id:
             raise StorageError("Analytics prompt runs require a durable turn identifier.")
         if turn_beat < 1 or speaker_position < 1:
@@ -71,6 +70,7 @@ class AnalyticsRepositoryMixin:
         run_id = _stable_identifier([turn_id, agent_id, turn_beat])[:32]
         now = utc_now()
         with self._write_lock, self.connection() as connection:
+            self._project_from_connection(connection, project_id)
             connection.execute(
                 """
                 INSERT INTO agent_prompt_runs(
@@ -158,11 +158,13 @@ class AnalyticsRepositoryMixin:
         status: str,
         message_id: str | None = None,
         provider_usage: dict[str, Any] | None = None,
+        provider_request_usage: list[dict[str, Any]] | None = None,
         output_chars: int | None = None,
     ) -> None:
         if status not in PROMPT_RUN_FINAL_STATUSES:
             raise StorageError("Invalid final analytics prompt-run status.")
         usage = provider_usage or {}
+        request_usage = provider_request_usage or []
 
         def optional_integer(key: str) -> int | None:
             value = usage.get(key)
@@ -176,6 +178,10 @@ class AnalyticsRepositoryMixin:
                     prompt_tokens = COALESCE(?, prompt_tokens),
                     completion_tokens = COALESCE(?, completion_tokens),
                     total_tokens = COALESCE(?, total_tokens),
+                    cached_prompt_tokens = COALESCE(?, cached_prompt_tokens),
+                    reasoning_tokens = COALESCE(?, reasoning_tokens),
+                    provider_requests = COALESCE(?, provider_requests),
+                    request_usage_json = ?,
                     output_chars = COALESCE(?, output_chars),
                     updated_at = ?
                 WHERE id = ?
@@ -186,6 +192,10 @@ class AnalyticsRepositoryMixin:
                     optional_integer("prompt_tokens"),
                     optional_integer("completion_tokens"),
                     optional_integer("total_tokens"),
+                    optional_integer("cached_prompt_tokens"),
+                    optional_integer("reasoning_tokens"),
+                    len(request_usage),
+                    json.dumps(request_usage, ensure_ascii=False),
                     max(0, int(output_chars)) if output_chars is not None else None,
                     utc_now(),
                     prompt_run_id,
@@ -245,9 +255,9 @@ class AnalyticsRepositoryMixin:
         return record
 
     def analytics_snapshot(self, project_id: str | None = None) -> dict:
-        if project_id is not None:
-            self.get_project(project_id)
         with self.connection() as connection:
+            if project_id is not None:
+                self._project_from_connection(connection, project_id)
             projects = [
                 dict(row)
                 for row in connection.execute(
@@ -339,6 +349,9 @@ class AnalyticsRepositoryMixin:
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
                     "total_tokens": 0,
+                    "cached_prompt_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "provider_requests": 0,
                     "speaker_positions": {},
                     "feedback": {kind: 0 for kind in sorted(ANALYTICS_FEEDBACK_TYPES)},
                 }
@@ -356,7 +369,8 @@ class AnalyticsRepositoryMixin:
             run_rows = connection.execute(
                 """
                 SELECT agent_id, status, speaker_position,
-                       prompt_tokens, completion_tokens, total_tokens
+                       prompt_tokens, completion_tokens, total_tokens,
+                       cached_prompt_tokens, reasoning_tokens, provider_requests
                 FROM agent_prompt_runs
                 """
                 + clause(),
@@ -371,6 +385,9 @@ class AnalyticsRepositoryMixin:
                 summary["prompt_tokens"] += int(row["prompt_tokens"] or 0)
                 summary["completion_tokens"] += int(row["completion_tokens"] or 0)
                 summary["total_tokens"] += int(row["total_tokens"] or 0)
+                summary["cached_prompt_tokens"] += int(row["cached_prompt_tokens"] or 0)
+                summary["reasoning_tokens"] += int(row["reasoning_tokens"] or 0)
+                summary["provider_requests"] += int(row["provider_requests"] or 0)
                 position = str(row["speaker_position"])
                 summary["speaker_positions"][position] = (
                     summary["speaker_positions"].get(position, 0) + 1
