@@ -4,21 +4,21 @@ services:
       - python
       - -m
       - uvicorn
-      - app.main:app
+      - motif_feedback.main:app
       - --host
       - 0.0.0.0
       - --port
       - "8000"
       - --reload
       - --reload-dir
-      - /app/app
+      - /app/motif_feedback
       - --no-server-header
       - --no-proxy-headers
 
     volumes:
       - type: bind
-        source: ./app
-        target: /app/app
+        source: ./motif_feedback
+        target: /app/motif_feedback
         read_only: true
 
   runner:

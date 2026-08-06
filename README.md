@@ -125,6 +125,14 @@ duplicating committed messages or changing sequential room causality.
 file. Each message is a numbered block with its speaker, timestamp, turn and response beat when
 available, sources, and retrieval notes.
 
+### Optional Round Map interoperability
+
+Motif Feedback remains independently usable, while its additive local bridge API can provide a
+structured, immutable packet of selected observer-owned motifs and checkpoints to a separate round
+coordinator. A completed bridge turn can also be read as an attributed execution trace. Bridge
+packets preserve evidence, project scope, and observing-agent ownership; importing or exporting one
+does not alter personas, memory, motif lifecycle, speaking order, or the normal room interface.
+
 ### Analytics and debugging
 
 **ANALYTICS / DEBUG** opens a project-filtered dashboard at `/analytics` for response activity,
@@ -231,7 +239,7 @@ context, persona history and dormant identity-change records, projects, files, s
 snapshots, and started-turn lifecycle records. Completed turns retain a bounded internal timing
 trace and provider-reported token counts when available; generated bodies and source contents are
 not copied into the trace. Seeded personas, shared context, and the provider catalog are copied
-from `app/seed/` on first startup. The runtime configuration is created only after you save
+from `motif_feedback/seed/` on first startup. The runtime configuration is created only after you save
 provider and model selections in **SETUP**. Afterward, all workspace state is persistent.
 
 SQLite schema changes are applied in place and rebuildable full-text indexes accelerate relevant
@@ -282,9 +290,9 @@ To run only the application process without Docker:
 ```bash
 python3.13 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 export WORKSPACE_ROOT="$PWD/workspace"
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-server-header --no-proxy-headers
+motif-feedback
 ```
 
 This does not start the isolated runner, so **RUN** is unavailable unless a runner is provided
@@ -295,10 +303,10 @@ Run the tests and development checks with:
 ```bash
 python3.13 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -e '.[dev]'
 python -m pytest
-ruff check app runner tests
-pip-audit -r requirements.txt
+ruff check motif_feedback runner tests
+pip-audit
 ```
 
 ## License

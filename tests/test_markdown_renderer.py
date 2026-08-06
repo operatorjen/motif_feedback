@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 NODE = shutil.which("node")
-MARKDOWN_MODULE = Path(__file__).parents[1] / "app" / "static" / "js" / "markdown.js"
+MARKDOWN_MODULE = Path(__file__).parents[1] / "motif_feedback" / "static" / "js" / "markdown.js"
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not available for the browser renderer test.")

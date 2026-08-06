@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import yaml
 
-from app.models import ChatRequest, RuntimeConfig
-from app.orchestration_memory import MemoryContext
-from app.orchestration_prompts import PromptBuilder
-from app.orchestrator import Orchestrator
-from app.providers import AgentCompletion, ProviderError, ProviderTimeout
-from app.search_router import SearchDecision, SearchRouter
+from motif_feedback.models import ChatRequest, RuntimeConfig
+from motif_feedback.orchestration_memory import MemoryContext
+from motif_feedback.orchestration_prompts import PromptBuilder
+from motif_feedback.orchestrator import Orchestrator
+from motif_feedback.providers import AgentCompletion, ProviderError, ProviderTimeout
+from motif_feedback.search_router import SearchDecision, SearchRouter
 
 
 class FakeStorage:
@@ -581,7 +581,7 @@ def test_runner_role_decorator_biases_only_the_next_agent_prompt():
 
 
 def test_runtime_persona_preserves_identity_and_adaptation_without_empty_scaffolding():
-    seed_root = Path(__file__).parents[1] / "app" / "seed"
+    seed_root = Path(__file__).parents[1] / "motif_feedback" / "seed"
     persona = yaml.safe_load(
         (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
     )
@@ -691,7 +691,7 @@ def test_memory_context_consolidates_beats_without_changing_the_raw_ledger():
 
 
 def test_system_prompt_removes_duplicate_documents_and_preserves_room_behavior():
-    seed_root = Path(__file__).parents[1] / "app" / "seed"
+    seed_root = Path(__file__).parents[1] / "motif_feedback" / "seed"
     persona = yaml.safe_load(
         (seed_root / "agents" / "agent_a.yaml").read_text(encoding="utf-8")
     )

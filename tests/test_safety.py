@@ -6,13 +6,13 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from app.agent_tools import AgentToolExecutor, ToolContext
-from app.config import RuntimeNotConfiguredError, Settings
-from app.file_tools import FileToolError, ProjectFileTools
-from app.models import RuntimeConfig
-from app.persona_store import PersonaStore, PersonaUpdateError
-from app.search_router import SearchRouter
-from app.storage import Storage
+from motif_feedback.agent_tools import AgentToolExecutor, ToolContext
+from motif_feedback.config import RuntimeNotConfiguredError, Settings
+from motif_feedback.file_tools import FileToolError, ProjectFileTools
+from motif_feedback.models import RuntimeConfig
+from motif_feedback.persona_store import PersonaStore, PersonaUpdateError
+from motif_feedback.search_router import SearchRouter
+from motif_feedback.storage import Storage
 
 
 def make_services(tmp_path: Path):

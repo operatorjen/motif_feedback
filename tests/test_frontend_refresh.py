@@ -11,7 +11,7 @@ ROOT = Path(__file__).parents[1]
 
 def run_module_test(tmp_path: Path, source_name: str, script: str) -> dict:
     module = tmp_path / f"{Path(source_name).stem}.mjs"
-    shutil.copyfile(ROOT / "app" / "static" / "js" / source_name, module)
+    shutil.copyfile(ROOT / "motif_feedback" / "static" / "js" / source_name, module)
     completed = subprocess.run(
         [NODE, "--input-type=module", "-e", script, module.as_uri()],
         check=True,

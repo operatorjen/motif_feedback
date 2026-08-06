@@ -7,7 +7,7 @@ import pytest
 
 NODE = shutil.which("node")
 TURN_QUEUE_MODULE = (
-    Path(__file__).parents[1] / "app" / "static" / "js" / "turn_queue.js"
+    Path(__file__).parents[1] / "motif_feedback" / "static" / "js" / "turn_queue.js"
 )
 
 
@@ -73,8 +73,8 @@ console.log(JSON.stringify({
 
 def test_chat_composer_exposes_the_turn_queue_without_disabling_typing():
     root = Path(__file__).parents[1]
-    html = (root / "app" / "static" / "index.html").read_text(encoding="utf-8")
-    source = (root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    html = (root / "motif_feedback" / "static" / "index.html").read_text(encoding="utf-8")
+    source = (root / "motif_feedback" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="prompt-queue"' in html
     assert "messageInput.disabled = !setupComplete" in source

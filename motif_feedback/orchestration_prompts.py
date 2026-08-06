@@ -460,7 +460,11 @@ TURN CONTRACT
                 continue
             actions = (
                 ", ".join(
-                    f"{action.get('tool')}{f'({action.get("path")})' if action.get('path') else ''}"
+                    (
+                        f"{action.get('tool')}({action.get('path')})"
+                        if action.get("path")
+                        else str(action.get("tool"))
+                    )
                     for action in event.get("actions", [])
                     if action.get("ok")
                 )
@@ -493,7 +497,11 @@ TURN CONTRACT
             )
             actions = (
                 ", ".join(
-                    f"{action.get('tool')}{f'({action.get("path")})' if action.get('path') else ''}"
+                    (
+                        f"{action.get('tool')}({action.get('path')})"
+                        if action.get("path")
+                        else str(action.get("tool"))
+                    )
                     for action in event.get("actions", [])
                     if action.get("ok")
                 )

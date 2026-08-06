@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
+import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .agent_tools import AgentToolExecutor
 from .async_tasks import cancel_and_wait
+from .bridge import build_motif_packet, build_turn_trace
 from .code_runner import CodeRunnerClient, CodeRunnerError
 from .config import RuntimeNotConfiguredError, get_settings
 from .constants import (
@@ -33,6 +36,7 @@ from .file_tools import FileToolError, ProjectFileTools
 from .memory_loops import memory_loop_for
 from .models import (
     AGENT_IDS,
+    BridgeMotifPacketRequest,
     ChatRequest,
     CodeRunInput,
     CodeRunRequest,
@@ -143,6 +147,17 @@ app.add_middleware(LocalSecurityMiddleware, guard=guard)
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+
+
+def run() -> None:
+    uvicorn.run(
+        "motif_feedback.main:app",
+        host=os.getenv("MOTIF_FEEDBACK_HOST", "127.0.0.1"),
+        port=int(os.getenv("MOTIF_FEEDBACK_PORT", os.getenv("APP_PORT", "8000"))),
+        reload=False,
+        server_header=False,
+        proxy_headers=False,
+    )
 
 
 async def _execute_chat_turn(
@@ -627,6 +642,32 @@ def motifs(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/bridge/projects/{project_id}/motif-packets")
+def create_bridge_motif_packet(
+    project_id: str,
+    payload: BridgeMotifPacketRequest,
+) -> dict:
+    try:
+        return build_motif_packet(
+            storage,
+            project_id,
+            motif_ids=payload.motif_ids,
+            checkpoint_ids=payload.checkpoint_ids,
+            inquiry=payload.inquiry,
+            human_note=payload.human_note,
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/bridge/projects/{project_id}/turns/{turn_id}/trace")
+def bridge_turn_trace(project_id: str, turn_id: str) -> dict:
+    try:
+        return build_turn_trace(storage, project_id, turn_id)
+    except StorageError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/motifs/{project_id}/{motif_id}")
 def motif_detail(project_id: str, motif_id: str) -> dict:
     try:
@@ -872,3 +913,7 @@ def delete_project_file(project_id: str, path: str = Query(min_length=1)) -> dic
         return file_tools.delete_file(project_id, path)
     except (FileToolError, StorageError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+if __name__ == "__main__":
+    run()

@@ -8,21 +8,21 @@ from pathlib import Path
 import pytest
 
 import runner.service as runner_service
-from app.code_runner import (
+from motif_feedback.code_runner import (
     CodeRunnerClient,
     CodeRunnerError,
     format_interactive_transcript,
 )
-from app.config import Settings
-from app.file_tools import ProjectFileTools
-from app.models import CodeRunRequest
-from app.role_decorators import (
+from motif_feedback.config import Settings
+from motif_feedback.file_tools import ProjectFileTools
+from motif_feedback.models import CodeRunRequest
+from motif_feedback.role_decorators import (
     format_role_decorator_prompt,
     pending_role_signals,
     validate_role_signals,
 )
-from app.run_coordinator import CodeRunCoordinator, CodeRunValidationError
-from app.storage import Storage
+from motif_feedback.run_coordinator import CodeRunCoordinator, CodeRunValidationError
+from motif_feedback.storage import Storage
 
 
 def test_runner_executes_python_from_a_temporary_copy(monkeypatch):

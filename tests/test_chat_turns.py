@@ -4,13 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import main as main_module
-from app.execution_ledger import ExecutionLedger
-from app.models import ChatRequest, RuntimeConfig
-from app.orchestrator import RoomResponse
-from app.providers import AgentCompletion
-from app.storage import Storage
-from app.turn_service import ChatTurnBudgetError, TurnService
+from motif_feedback import main as main_module
+from motif_feedback.execution_ledger import ExecutionLedger
+from motif_feedback.models import ChatRequest, RuntimeConfig
+from motif_feedback.orchestrator import RoomResponse
+from motif_feedback.providers import AgentCompletion
+from motif_feedback.storage import Storage
+from motif_feedback.turn_service import ChatTurnBudgetError, TurnService
 
 
 class CountingOrchestrator:

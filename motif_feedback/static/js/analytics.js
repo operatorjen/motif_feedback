@@ -5,19 +5,19 @@ const AGENTS = {
     name: "The Phenomenologist",
     short: "Phenomenologist",
     className: "agent-a",
-    color: "#ef8354",
+    color: "#18b6ff",
   },
   agent_b: {
     name: "The Cyberneticist",
     short: "Cyberneticist",
     className: "agent-b",
-    color: "#58a6ff",
+    color: "#ffbe18",
   },
   agent_c: {
     name: "The Game Theorist",
     short: "Game Theorist",
     className: "agent-c",
-    color: "#c792ea",
+    color: "#ff1871",
   },
 };
 

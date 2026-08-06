@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models import RuntimeConfig
-from app.provider_catalog import (
+from motif_feedback.models import RuntimeConfig
+from motif_feedback.provider_catalog import (
     ProviderCatalogError,
     ProviderCatalogStore,
     ProviderRegistry,

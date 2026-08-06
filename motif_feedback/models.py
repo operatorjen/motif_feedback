@@ -213,6 +213,13 @@ class InteractionFeedbackUpdate(BaseModel):
     active: bool = True
 
 
+class BridgeMotifPacketRequest(BaseModel):
+    motif_ids: list[str] = Field(default_factory=list, max_length=20)
+    checkpoint_ids: list[str] = Field(default_factory=list, max_length=12)
+    inquiry: str = Field(default="", max_length=12_000)
+    human_note: str = Field(default="", max_length=4_000)
+
+
 class ProviderCatalogEdit(BaseModel):
     yaml_text: str = Field(
         min_length=1,

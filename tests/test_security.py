@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.security import LocalSecurityMiddleware, LocalSessionGuard
+from motif_feedback.security import LocalSecurityMiddleware, LocalSessionGuard
 
 
 def make_app() -> tuple[FastAPI, LocalSessionGuard]:

@@ -1067,11 +1067,9 @@ function renderMessages(messages) {
   if (!messages.length) {
     const empty = document.createElement("div");
     empty.className = "empty-room";
-    const title = document.createElement("h2");
-    title.textContent = "THE ROOM IS QUIET.";
     const copy = document.createElement("p");
     copy.textContent = "Speak to everyone, address one agent by name, ask for current research, or ask them to create a file in this project.";
-    empty.append(title, copy);
+    empty.append(copy);
     elements.messages.replaceChildren(empty);
     state.renderedProject = state.currentProject;
     elements.newReturns.classList.add("hidden");

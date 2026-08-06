@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from app.storage import Storage
+from motif_feedback.storage import Storage
 
 
 def test_prompt_usage_columns_are_added_to_existing_databases(tmp_path: Path):
@@ -246,7 +246,7 @@ def test_analytics_records_context_feedback_and_prompted_motif_returns(tmp_path:
 
 
 def test_analytics_page_is_separate_and_linked_from_the_room():
-    root = Path(__file__).parents[1] / "app" / "static"
+    root = Path(__file__).parents[1] / "motif_feedback" / "static"
     room = (root / "index.html").read_text(encoding="utf-8")
     analytics = (root / "analytics.html").read_text(encoding="utf-8")
     source = (root / "js" / "analytics.js").read_text(encoding="utf-8")

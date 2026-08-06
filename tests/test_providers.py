@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.agent_tools import AgentToolExecutor, ToolContext
-from app.providers import DirectProviderClient, ProviderError, ProviderTimeout
-from app.tool_metadata import (
+from motif_feedback.agent_tools import AgentToolExecutor, ToolContext
+from motif_feedback.providers import DirectProviderClient, ProviderError, ProviderTimeout
+from motif_feedback.tool_metadata import (
     tool_changes_state,
     tool_recovery_strategy,
     tool_request_fingerprint,

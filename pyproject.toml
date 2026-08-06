@@ -1,12 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "motif-feedback"
+version = "0.4.0"
+description = "A local-first engine for persistent, multi-perspectival feedback."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+  "fastapi>=0.140,<1",
+  "httpx>=0.28,<1",
+  "pydantic>=2.13,<3",
+  "pydantic-settings>=2.14,<3",
+  "PyYAML>=6,<7",
+  "python-multipart>=0.0.32,<1",
+  "uvicorn>=0.51,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pip-audit>=2.10,<3",
+  "pytest>=9.1,<10",
+  "ruff>=0.16,<1",
+]
+
+[project.scripts]
+motif-feedback = "motif_feedback.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["motif_feedback"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
 
 [tool.ruff]
-target-version = "py313"
 line-length = 100
+target-version = "py311"
 exclude = ["workspace"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]

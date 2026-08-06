@@ -1,6 +1,6 @@
 import asyncio
 
-from app.async_tasks import cancel_and_wait
+from motif_feedback.async_tasks import cancel_and_wait
 
 
 def test_cancel_and_wait_stops_unfinished_request_work():

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app import main as main_module
-from app.conversation_export import conversation_markdown
-from app.storage import Storage
+from motif_feedback import main as main_module
+from motif_feedback.conversation_export import conversation_markdown
+from motif_feedback.storage import Storage
 
 
 def test_complete_conversation_export_preserves_order_and_message_blocks(tmp_path):

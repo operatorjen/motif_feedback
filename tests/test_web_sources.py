@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.storage import Storage, StorageError
-from app.web_sources import (
+from motif_feedback.storage import Storage, StorageError
+from motif_feedback.web_sources import (
     FetchedPage,
     PageFetchError,
     UnsafeUrlError,

@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_tools import AgentToolExecutor, ToolContext
-from app.file_tools import ProjectFileTools
-from app.motif_checkpoints import agent_pattern_checkpoints, project_motif_analysis
-from app.motif_trajectories import motif_sequence_summary
-from app.storage import Storage, StorageError
+from motif_feedback.agent_tools import AgentToolExecutor, ToolContext
+from motif_feedback.file_tools import ProjectFileTools
+from motif_feedback.motif_checkpoints import agent_pattern_checkpoints, project_motif_analysis
+from motif_feedback.motif_trajectories import motif_sequence_summary
+from motif_feedback.storage import Storage, StorageError
 
 
 def make_storage(tmp_path: Path) -> tuple[Storage, dict]:
